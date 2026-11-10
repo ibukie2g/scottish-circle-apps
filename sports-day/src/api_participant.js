@@ -135,11 +135,15 @@ function saveIntro(participantId, intro) {
   return api_(function () {
     var p = requireParticipant_(participantId);
     intro = intro || {};
-    var sport = toStr_(intro.sport);
+    // やっていたスポーツは複数選択可(2026-11-11 決定)。配列 sports か、旧形式の文字列 sport を受け付ける
+    var picked = Array.isArray(intro.sports) ? intro.sports.map(toStr_) : [toStr_(intro.sport)];
+    picked = INTRO_SPORTS.filter(function (s) { return picked.indexOf(s) >= 0; }); // 選択肢の順に並べ、重複と不正な値を除く
+    if (picked.length === 0) throw appError_('INVALID', 'やっていたスポーツを選んでください');
+    if (picked.indexOf('特になし') >= 0 && picked.length > 1) throw appError_('INVALID', '「特になし」はほかのスポーツと一緒に選べません');
+    var sport = picked.join('・');
     var comment = toStr_(intro.comment);
     var nickname = toStr_(intro.nickname);
     var sns = toStr_(intro.snsConsent);
-    if (INTRO_SPORTS.indexOf(sport) < 0) throw appError_('INVALID', 'やっていたスポーツを選んでください');
     if (!comment) throw appError_('INVALID', 'ひとことを入れてください');
     if (Array.from(comment).length > INTRO_COMMENT_MAX) throw appError_('INVALID', 'ひとことは' + INTRO_COMMENT_MAX + '字までです');
     if (Array.from(nickname).length > INTRO_NICKNAME_MAX) throw appError_('INVALID', 'あだ名は' + INTRO_NICKNAME_MAX + '字までです');

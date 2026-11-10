@@ -137,7 +137,10 @@ data = {
 ### saveIntro(participantId, intro)
 自己紹介の保存(上書き)。いつでも何度でも。
 ```js
-saveIntro('P01', { sport: 'バスケ', comment: 'ラーメンが好き', nickname: 'はな', snsConsent: '顔OK' })
+saveIntro('P01', { sports: ['バスケ', 'バレー'], comment: 'ラーメンが好き', nickname: 'はな', snsConsent: '顔OK' })
+// やっていたスポーツは複数選択可(配列 sports)。「特になし」はほかと一緒に選べない。
+// 保存・取得のときの sport は「バスケ・バレー」のように「・」でつないだ文字列になる。旧形式 { sport: 'バスケ' } も受け付ける
+// 写真のSNS掲載(snsConsent)の画面の文言は「顔が写っていてもOK/顔を隠せばOK/載せないでほしい」。送る値は '顔OK' / '顔を隠せばOK' / '載せない'
 data = { saved: true }
 ```
 - `sport`:options.sports のどれか(必須)

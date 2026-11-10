@@ -91,6 +91,9 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   ok(g.saveIntro('P01', { sport: 'バスケ', comment: '=ラーメンが好き', nickname: 'はな', snsConsent: '顔OK' }));
   ok(g.saveIntro('P01', { sport: 'バレー', comment: 'ラーメンが好き', nickname: 'はな', snsConsent: '顔を隠せばOK' }));
   ok(g.saveIntro('P02', { sport: 'その他', comment: '犬を飼ってる', snsConsent: '載せない' }));
+  ok(g.saveIntro('P02', { sports: ['バレー', 'バスケ', 'バスケ'], comment: '犬を飼ってる', snsConsent: '載せない' }));
+  assert.equal(g.saveIntro('P02', { sports: ['特になし', 'バスケ'], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
+  assert.equal(g.saveIntro('P02', { sports: [], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
   assert.equal(roster.getSheetByName('自己紹介').getLastRow(), 3); // 上書き
   assert.equal(ok(g.getIntro('P01')).intro.sport, 'バレー');
 
