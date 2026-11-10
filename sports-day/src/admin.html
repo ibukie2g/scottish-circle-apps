@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <!-- 仮の運営画面(本番の画面は別に作る)。サーバーとのやりとりの確認用 -->
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    input, button { font-size: 16px; padding: 8px; }
+    pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>運営(仮の画面)</h1>
+  <input id="pw" type="password" placeholder="運営パスワード">
+  <button id="login">ログイン</button>
+  <button id="overview" disabled>一覧を取得</button>
+  <pre id="out"></pre>
+  <script>
+    var token = sessionStorage.getItem('adminToken') || '';
+    function show(res) { document.getElementById('out').textContent = JSON.stringify(res, null, 2); }
+    function enable() { document.getElementById('overview').disabled = !token; }
+    document.getElementById('login').onclick = function () {
+      google.script.run.withSuccessHandler(function (res) {
+        show(res);
+        if (res.ok) { token = res.data.token; sessionStorage.setItem('adminToken', token); enable(); }
+      }).adminLogin(document.getElementById('pw').value);
+    };
+    document.getElementById('overview').onclick = function () {
+      google.script.run.withSuccessHandler(show).adminGetOverview(token);
+    };
+    enable();
+  </script>
+</body>
+</html>

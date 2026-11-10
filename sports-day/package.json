@@ -1,0 +1,8 @@
+{
+  "name": "sports-day",
+  "private": true,
+  "description": "合同運動会アプリ(GAS)。純粋関数のテストを Node.js で実行する",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

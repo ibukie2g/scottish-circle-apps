@@ -1,0 +1,116 @@
+// GAS のサービスの最小限の偽物(テスト用)。src/*.js を vm で読み込んで、通しの流れを確かめる
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+class FakeRange {
+  constructor(sheet, row, col, nr, nc) { Object.assign(this, { sheet, row, col, nr, nc }); }
+  getValues() {
+    const out = [];
+    for (let r = 0; r < this.nr; r++) {
+      const line = [];
+      for (let c = 0; c < this.nc; c++) {
+        const v = (this.sheet.data[this.row - 1 + r] || [])[this.col - 1 + c];
+        line.push(v === undefined ? '' : v);
+      }
+      out.push(line);
+    }
+    return out;
+  }
+  setValues(values) {
+    if (values.length !== this.nr || values[0].length !== this.nc) throw new Error('size mismatch');
+    values.forEach((line, r) => line.forEach((v, c) => this.sheet.set(this.row + r, this.col + c, v)));
+    return this;
+  }
+  setValue(v) { this.sheet.set(this.row, this.col, v); return this; }
+  clearContent() {
+    for (let r = 0; r < this.nr; r++) for (let c = 0; c < this.nc; c++) this.sheet.set(this.row + r, this.col + c, '');
+    return this;
+  }
+  setFontWeight() { return this; }
+  setNumberFormat() { return this; }
+}
+
+class FakeSheet {
+  constructor(name) { this.name = name; this.data = []; }
+  getName() { return this.name; }
+  set(r, c, v) {
+    if (typeof v === 'string' && v.startsWith("'")) v = v.slice(1);
+    while (this.data.length < r) this.data.push([]);
+    const row = this.data[r - 1];
+    while (row.length < c) row.push('');
+    row[c - 1] = v;
+  }
+  getLastRow() {
+    for (let r = this.data.length; r > 0; r--) if (this.data[r - 1].some(v => v !== '' && v !== null)) return r;
+    return 0;
+  }
+  getLastColumn() {
+    let m = 0;
+    this.data.forEach(row => { for (let c = row.length; c > m; c--) if (row[c - 1] !== '' && row[c - 1] !== null) { m = c; break; } });
+    return m;
+  }
+  getRange(a, b, c, d) {
+    if (typeof a === 'string') return new FakeRange(this, 1, 2, 1, 1);
+    return new FakeRange(this, a, b, c || 1, d || 1);
+  }
+  getDataRange() { return new FakeRange(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
+  setFrozenRows() {}
+}
+
+class FakeSpreadsheet {
+  constructor() { this.sheets = []; }
+  getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
+  insertSheet(n) { const s = new FakeSheet(n); this.sheets.push(s); return s; }
+  getSheets() { return this.sheets.slice(); }
+  deleteSheet(s) { this.sheets = this.sheets.filter(x => x !== s); }
+  setSpreadsheetTimeZone() {}
+}
+
+function makeCache() {
+  const m = new Map();
+  return {
+    store: m,
+    get: k => (m.has(k) ? m.get(k) : null),
+    put: (k, v) => { if (String(v).length > 100000) throw new Error('too big'); m.set(k, String(v)); },
+    remove: k => m.delete(k),
+    removeAll: ks => ks.forEach(k => m.delete(k)),
+    getAll: ks => { const o = {}; ks.forEach(k => { if (m.has(k)) o[k] = m.get(k); }); return o; }
+  };
+}
+
+function loadGas({ props = {}, user = 'owner@example.com' } = {}) {
+  const app = new FakeSpreadsheet();
+  const roster = new FakeSpreadsheet();
+  const cache = makeCache();
+  let uuid = 0;
+  const ctx = {
+    console: { log() {}, error() {} },
+    SpreadsheetApp: {
+      getActive: () => app,
+      openById: () => roster,
+      flush() {}
+    },
+    CacheService: { getScriptCache: () => cache },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null) }) },
+    Session: {
+      getActiveUser: () => ({ getEmail: () => ctx.__activeUser }),
+      getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' })
+    },
+    Utilities: {
+      getUuid: () => 'uuid-' + (++uuid),
+      sleep() {},
+      formatDate: (d) => d.toISOString()
+    },
+    __activeUser: user
+  };
+  vm.createContext(ctx);
+  const dir = path.join(__dirname, '..', '..', 'src');
+  fs.readdirSync(dir).filter(f => f.endsWith('.js')).sort().forEach(f => {
+    vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
+  });
+  return { ctx, app, roster, cache };
+}
+
+module.exports = { loadGas, FakeSpreadsheet };
