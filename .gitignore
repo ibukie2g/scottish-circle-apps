@@ -1,0 +1,7 @@
+# clasp の認証情報(ホームにできるが念のため)
+.clasprc.json
+# 個人情報を含むデータは入れない
+*.csv
+*.xlsx
+node_modules/
+.DS_Store
