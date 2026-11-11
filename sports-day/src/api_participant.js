@@ -237,10 +237,14 @@ function submitPrediction(participantId, matchId, winnerTeam) {
       var m = view.match;
       if (winner !== m.team1 && winner !== m.team2) throw appError_('INVALID', '勝つチームは ' + m.team1 + ' か ' + m.team2 + ' です');
       var pid = toStr_(participantId);
-      appendRowNoLock_(SH_PREDICTIONS, { '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
+      // 自分専用の行:予想のある試合ごとに100行の区画、その中の自分の行
+      var me = requireParticipant_(pid);
+      var block = readMatches_().filter(function (x) { return x.predictionStatus !== 'なし'; })
+        .map(function (x) { return x.id; }).indexOf(m.id);
+      writeSlotRow_(sheet_(SH_PREDICTIONS), block >= 0 ? slotRow_(me, block, SLOT_BLOCK) : -1, { '試合ID': m.id, '参加者ID': pid },
+        { '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
       invalidate_([SH_PREDICTIONS]);
       // 予想した人は来ている
-      var me = requireParticipant_(pid);
       if (me.arrivedAt === null) markArrived_(me);
       return predictionView_(pid, m.id, true);
     })();
@@ -332,6 +336,16 @@ function startQuiz(participantId) {
   });
 }
 
+var SLOT_BLOCK = 100;      // 予想:1試合あたりの行数(参加者は99人まで)
+var NEAR_PER_PERSON = 10;  // 惜しい答え:1人あたりの行数(それ以上はロックを取って下に足す)
+
+/** 惜しい答えの番号の土台。P07 → 700(1人あたり99件まで) */
+function nearMissBase_(pid) {
+  var m = String(pid).match(/\d+/);
+  if (!m) throw appError_('INVALID', '参加者IDの形がちがいます(' + pid + ')');
+  return Number(m[0]) * 100;
+}
+
 function findBy_(rows, pid) {
   for (var i = 0; i < rows.length; i++) if (rows[i].participantId === pid) return rows[i];
   return null;
@@ -352,10 +366,14 @@ function submitQuiz(participantId, answers) {
     var originAns = toStr_(answers.origin);
     // 締め切りで全員が同時に送るので、ロックは「惜しい答え」の番号を振るところだけにする。
     // 回答は行を足すだけ(読むときは同じ人の最初の行を使う)
-    if (readState_(true).mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
+    var st = readState_(true);
+    if (st.mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
+    // 送った目印。クイズの開始時刻ごとに分ける(開始し直したら、目印も新しくなる)
+    var doneKey = 'quizDone:' + (st.quizStartedAt || '') + ':' + pid;
     return (function () {
-      requireParticipant_(pid);
-      if (findBy_(readQuizAnswers_(true), pid)) return quizResult_(pid, true); // 再送:最初の回答のまま
+      var me = requireParticipant_(pid);
+      // 再送:最初の回答のまま。送った目印はキャッシュに置く(30人同時でもシートを読み直さない)
+      if (cache_().get(doneKey) || findBy_(readQuizAnswers_(), pid)) return quizResult_(pid, true);
       var q = findBy_(readQuizQuestions_(), pid) || findBy_(readQuizQuestions_(true), pid);
       if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
       if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
@@ -368,29 +386,30 @@ function submitQuiz(participantId, answers) {
       var originCorrect = '';
       if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
       cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
-      appendRowNoLock_(SH_QUIZ_A, {
+      writeSlotRow_(sheet_(SH_QUIZ_A), slotRow_(me), { '参加者ID': pid }, {
         '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.correctIds.join(','),
         '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
         '送信時刻': new Date()
       });
-      if (j.nearMisses.length) {
-        // 番号を重ねないために、ここだけロックを取る(惜しい答えがある人だけなので少ない)
-        withLock_(function () {
-          var near = readNearMisses_(true);
-          if (near.some(function (n) { return n.participantId === pid; })) return; // 送り直しで二重にしない
-          var nums = near.map(function (n) { return n.number; });
-          var next = nums.length ? Math.max.apply(null, nums) + 1 : 1;
-          var rows = j.nearMisses.map(function (nm) {
-            var no = next++;
-            // 入力そのものはシートに書かず、キャッシュにだけ置く
-            cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
-            return { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING };
-          });
-          appendRows_(SH_NEAR, rows);
-        });
-      }
+      cache_().put(doneKey, '1', NEAR_CACHE_SEC);
+      // 惜しい答え:番号は参加者IDから決める(P07 なら 701, 702 …)。行は1人10行ずつの自分専用の行。
+      // 送り直しで同じ番号が二重になっても、読むときに1つにまとめる(readNearMisses_)
+      var base = nearMissBase_(pid);
+      var nearSh = j.nearMisses.length ? sheet_(SH_NEAR) : null;
+      j.nearMisses.forEach(function (nm, k) {
+        var no = base + k + 1;
+        // 入力そのものはシートに書かず、キャッシュにだけ置く
+        cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
+        writeSlotRow_(nearSh, k < NEAR_PER_PERSON ? slotRow_(me, 0, 0, { per: NEAR_PER_PERSON, offset: k }) : -1,
+          { '番号': no }, { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING });
+      });
       invalidate_([SH_QUIZ_A, SH_NEAR]);
-      return quizResult_(pid, true);
+      // 答え合わせは、いま計算した結果から作る(書いたばかりのシートを読み直さない)
+      return buildQuizResult_(q, {
+        correctIds: j.correctIds,
+        originAnswer: q.choices.indexOf(originAns) >= 0 ? originAns : '',
+        originCorrect: originCorrect === true
+      }, j.nearMisses.map(function (nm) { return nm.candidateId; }), people);
     })();
   });
 }
@@ -400,12 +419,19 @@ function quizResult_(pid, fresh) {
   var a = findBy_(readQuizAnswers_(fresh), pid);
   var q = findBy_(readQuizQuestions_(fresh), pid);
   if (!a || !q) return null;
-  // 名簿と自己紹介はクイズ中に変わらないので、キャッシュを使う(名簿ファイルを開き直さない)
-  var people = readPeople_();
-  var intros = readIntros_();
   var pending = readNearMisses_(fresh).filter(function (n) {
     return n.participantId === pid && n.judgement === JUDGE_PENDING;
   }).map(function (n) { return n.candidateId; });
+  return buildQuizResult_(q, a, pending, readPeople_());
+}
+
+/**
+ * 答え合わせの中身を作る
+ * @param q 問題 / a {correctIds, originAnswer, originCorrect} / pending 運営の判定待ちの候補ID
+ */
+function buildQuizResult_(q, a, pending, people) {
+  // 名簿と自己紹介はクイズ中に変わらないので、キャッシュを使う(名簿ファイルを開き直さない)
+  var intros = readIntros_();
   var members = q.nameTargets.map(function (id) {
     var p = people[id] || {};
     var it = intros[id];
@@ -463,11 +489,14 @@ function submitSurvey(survey) {
       if (v === null || v < 1 || v > 5 || Math.floor(v) !== v) throw appError_('INVALID', '1〜5で選んでください');
     });
     if (['はい', 'いいえ'].indexOf(again) < 0) throw appError_('INVALID', '「また参加したいか」を選んでください');
-    appendRowNoLock_(SH_SURVEY, {
-      '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
-      'また参加したいか': again, '自由記述': comment
+    // 匿名なので自分専用の行が決められない。ロックを取って下に足す(ロックの中は書くだけにして短くする)
+    withLock_(function () {
+      appendRows_(SH_SURVEY, [{
+        '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
+        'また参加したいか': again, '自由記述': comment
+      }]);
+      invalidate_([SH_SURVEY]);
     });
-    invalidate_([SH_SURVEY]);
     return { saved: true };
   });
 }

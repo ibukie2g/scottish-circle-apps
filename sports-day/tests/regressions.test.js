@@ -44,8 +44,7 @@ test('30人が同時に書く操作は、ほかの人がロックを持ってい
  assert.equal(g.saveIntro('P01',{sports:['バスケ'],comment:'よろしく',snsConsent:'載せない'}).ok,true);
  assert.equal(g.startQuiz('P01').ok,true);
  assert.equal(g.submitQuiz('P01',{names:[],origin:''}).ok,true);
- assert.equal(g.submitSurvey({fun:5,talked:4,again:'はい'}).ok,true);
- e.lock.held=false;
+ e.lock.held=false; // アンケートは匿名で自分専用の行がないので、短いロックを取る(ここでは確かめない)
 });
 test('予想を送り直したら最新の1件だけ数える・クイズの二重送信は最初の1件だけ',()=>{
  const e=world(),g=e.ctx;
@@ -59,8 +58,8 @@ test('予想を送り直したら最新の1件だけ数える・クイズの二�
  assert.equal(mine.length,1);assert.equal(mine[0].choice,pick[1]);
  g.adminStartQuiz(e.token);g.startQuiz('P03');
  assert.equal(g.submitQuiz('P03',{names:['架空 一'],origin:''}).ok,true);
- // 送り直しの行が足されても、読むときは最初の行
- g.appendRowNoLock_('クイズ回答',{'参加者ID':'P03','書いた人数':0,'正解と判定した人のID':'','名前の正答率':0,'送信時刻':new Date()});
+ // 送り直しの行が(ロックを取って)下に足されても、読むときは最初の行
+ e.app.getSheetByName('クイズ回答').appendRow(['P03',0,'',0]);
  g.CacheService.getScriptCache().remove('tbl:クイズ回答');
  const a=g.readQuizAnswers_(true).filter(x=>x.participantId==='P03');
  assert.equal(a.length,1);assert.equal(a[0].writtenCount,1);
@@ -113,4 +112,25 @@ test('HTMLの<script>の行に // コメントを書かない(GASが行末まで
  const fs=require('fs'),path=require('path'),dir=path.join(__dirname,'..','src');
  const bad=fs.readdirSync(dir).filter(f=>f.endsWith('.html')).flatMap(f=>fs.readFileSync(path.join(dir,f),'utf8').split(/\r?\n/).map((l,i)=>({f,i:i+1,l}))).filter(x=>/\/\/.*<\/script>/.test(x.l));
  assert.deepEqual(bad.map(x=>x.f+':'+x.i),[]);
+});
+test('同時に送る書き込みは、その人専用の行に書く(いちばん下に足すと同時に上書きし合うため)',()=>{
+ const e=world(),g=e.ctx; // 参加者 P01〜P03 は参加者シートの2〜4行目
+ g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
+ ['P03','P01'].forEach(id=>g.selectSelf(id));
+ assert.equal(g.saveIntro('P03',{sports:['バスケ'],comment:'三',snsConsent:'載せない'}).ok,true);
+ assert.equal(e.roster.getSheetByName('自己紹介').data[3][0],'P03'); // 4行目
+ assert.equal(g.submitPrediction('P03','V-SF1','A').ok,true);
+ const pr=e.app.getSheetByName('予想').data;
+ const block=g.readMatches_().filter(x=>x.predictionStatus!=='なし').map(x=>x.id).indexOf('V-SF1');
+ assert.equal(pr[block*100+3][1],'P03'); // 区画 + 4行目
+ g.adminStartQuiz(e.token);g.startQuiz('P01');
+ assert.equal(g.submitQuiz('P01',{names:[],origin:''}).ok,true);
+ assert.equal(e.app.getSheetByName('クイズ回答').data[1][0],'P01'); // 2行目
+});
+test('自分専用の行にほかの人のデータがあれば、上書きせずに下に足す',()=>{
+ const e=world(),g=e.ctx;
+ const sh=e.roster.getSheetByName('自己紹介');sh.set(2,1,'P99');sh.set(2,3,'ほかの人'); // P01 の行に別の人
+ assert.equal(g.saveIntro('P01',{sports:['バレー'],comment:'一',snsConsent:'載せない'}).ok,true);
+ assert.equal(sh.data[1][2],'ほかの人');
+ assert.equal(g.getIntro('P01').data.intro.comment,'一');
 });

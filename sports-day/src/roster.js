@@ -143,14 +143,13 @@ function readIntros_(fresh) {
 }
 
 /**
- * 自己紹介を保存する。ロックなしで、いつも下に1行足す(Sheet.appendRow は同時に呼ばれても重ならない)。
- * 読むとき(readIntros_)は同じ人の下の行=最新を使う。書き直した人は古い行も残る
+ * 自己紹介を保存する(上書き)。ロックなしで、その人専用の行(参加者シートと同じ行番号)に書く。
+ * 30人が同時に保存しても行がぶつからない(writeSlotRow_)
  */
 function writeIntro_(id, intro) {
   var sh = rosterSheet_(rosterSs_(), ROSTER_INTRO_SHEET);
   var h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
   if (findCol_(h, '参加者ID') < 0) throw appError_('SETUP', '名簿ファイルの「自己紹介」シートに「参加者ID」列がありません');
-  var row = h.map(function () { return ''; });
   var put = {
     '参加者ID': id,
     'やっていたスポーツ': intro.sport,
@@ -159,11 +158,13 @@ function writeIntro_(id, intro) {
     '写真のSNS掲載': intro.snsConsent,
     '更新時刻': new Date()
   };
-  Object.keys(put).forEach(function (k) {
-    var c = findCol_(h, k);
-    if (c >= 0) row[c] = cellSafe_(put[k]);
+  var obj = {};
+  h.forEach(function (name) {
+    Object.keys(put).forEach(function (k) { if (normHeader_(name) === normHeader_(k)) obj[toStr_(name)] = put[k]; });
   });
-  sh.appendRow(row);
+  var keys = {};
+  keys[toStr_(h[findCol_(h, '参加者ID')])] = id; // その行の持ち主
+  writeSlotRow_(sh, slotRow_(requireParticipant_(id)), keys, obj);
   cache_().remove('intros:v1');
 }
 

@@ -216,15 +216,40 @@ function appendRows_(name, objs) {
 }
 
 /**
- * 1行を下に足す(ロックなしで使える)。Sheet.appendRow は同時に呼ばれても行が重ならない。
- * 30人が同時に送る場面(予想・クイズ回答・アンケート)で、順番待ちをなくすために使う。
- * 見出しはキャッシュから読む(見出しの行は本番中に変えない前提)
+ * 「自分専用の行」に書く(ロックなし)。30人が同時に送る場面で使う。
+ *
+ * 同時に「いちばん下に足す」と行が上書きし合う(appendRow でも起きた。2026-11-11 の負荷テストで確認)。
+ * 別々の行に書くのは同時でも安全なので、人ごと(と試合ごと)に決まった行に書く。
+ * 行番号は参加者シートの行の順番から決める(slotRow_)。
+ *
+ * 安全のため、その行に別の人(keys が違う)のデータがあったり、シートの行数が足りなかったりしたら、
+ * ロックを取って下に足す(参加者シートを並べ替えたときなど)。
+ * @param sh シート / row 書く行 / keys {見出し: 値}(その行の持ち主を表す列)/ obj 書く値
  */
-function appendRowNoLock_(name, obj) {
-  var sh = sheet_(name);
-  var headers = readTable_(name).headers;
-  if (!headers.length) headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(toStr_);
-  sh.appendRow(headers.map(function (h) { return (h in obj) ? cellSafe_(obj[h]) : ''; }));
+function writeSlotRow_(sh, row, keys, obj) {
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(toStr_);
+  var line = headers.map(function (h) { return (h in obj) ? cellSafe_(obj[h]) : ''; });
+  if (row >= 2 && row <= sh.getMaxRows()) {
+    var cur = sh.getRange(row, 1, 1, headers.length).getValues()[0];
+    var mine = Object.keys(keys).every(function (k) {
+      var v = toStr_(cur[headers.indexOf(k)]);
+      return v === '' || v === toStr_(keys[k]);
+    });
+    if (mine) {
+      sh.getRange(row, 1, 1, headers.length).setValues([line]);
+      return;
+    }
+  }
+  withLock_(function () { sh.appendRow(line); });
+}
+
+/**
+ * 自分専用の行の番号。参加者シートで k 番目(1から)の人 → block 番目の区画の k 番目の行
+ * @param p 参加者(readParticipants_ の1件) / block 区画の番号(0から) / size 1区画の行数 / sub 区画の中のずれ
+ */
+function slotRow_(p, block, size, sub) {
+  var k = p._row - 1; // 参加者シートの2行目の人が1
+  return 1 + (block || 0) * (size || 0) + (k - 1) * (sub ? sub.per : 1) + (sub ? sub.offset : 0) + 1;
 }
 
 /** キーと値のシート(状態・設定)を { キー: 値 } で読む */

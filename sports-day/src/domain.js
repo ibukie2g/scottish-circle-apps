@@ -164,7 +164,11 @@ function readNearMisses_(fresh) {
       judgement: j === 'OK' || j === 'NG' ? j : JUDGE_PENDING,
       _row: r._row
     };
-  }).filter(function (n) { return n.number !== null && n.participantId; });
+  }).filter(function (n) { return n.number !== null && n.participantId; }).filter(function (n, i, all) {
+    // ロックなしで行を足すので、送り直しで同じ番号が二重になったら最初の行だけを使う
+    for (var k = 0; k < i; k++) if (all[k].number === n.number) return false;
+    return true;
+  });
 }
 
 function readOdai_(fresh) {
@@ -237,18 +241,23 @@ function displayName_(people, id) {
   return p && p.name ? p.name : id;
 }
 
+/** その試合の予想と公開の記録を消す(ロックの中で使う)。
+ *  予想は「自分専用の行」に書くので、行を詰めずにその試合の行だけを空にする */
 function clearMatchPredictions_(mid) {
   [SH_PREDICTIONS, '予想公開'].forEach(function (name) {
     var t = readTable_(name, true);
-    var keep = t.rows.filter(function (r) { return toStr_(r['試合ID']) !== mid; });
-    if (keep.length === t.rows.length) return;
+    var hit = t.rows.filter(function (r) { return toStr_(r['試合ID']) === mid; });
+    if (!hit.length) return;
     var sh = sheet_(name);
-    if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, t.headers.length).clearContent();
-    appendRows_(name, keep);
+    hit.forEach(function (r) { sh.getRange(r._row, 1, 1, t.headers.length).clearContent(); });
     invalidate_([name]);
   });
+  cache_().removeAll(TEAMS.map(function (team) { return pubKey_(mid, team); }));
 }
+/** 公開した目印(キャッシュ)。そろった瞬間に何人もが同時に公開しようとしても、ロックを1回で済ませる */
+function pubKey_(mid, team) { return 'pub:' + mid + ':' + team; }
 function predictionPublished_(mid, team, fresh) {
+  if (cache_().get(pubKey_(mid, team))) return true;
   return readTable_('予想公開', fresh).rows.some(function (r) { return r['試合ID'] === mid && r['チーム'] === team; });
 }
 function publishPrediction_(mid, team) {
@@ -256,4 +265,5 @@ function publishPrediction_(mid, team) {
     appendRows_('予想公開', [{'試合ID': mid, 'チーム': team}]);
     invalidate_(['予想公開']);
   }
+  cache_().put(pubKey_(mid, team), '1', NEAR_CACHE_SEC);
 }
