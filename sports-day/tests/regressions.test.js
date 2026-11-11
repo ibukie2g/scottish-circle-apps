@@ -32,10 +32,38 @@ test('二層キャッシュで古い状態を延命しない',()=>{
  const e=world(),g=e.ctx;g.readState_();e.clock.advance(1000);e.app.getSheetByName('状態').data.find(r=>r[0]==='モード')[1]='結果待ち';
  e.clock.advance(8000);g.getState();e.clock.advance(2000);assert.equal(g.getState().data.mode,'結果待ち');
 });
-test('ロック待ち中の結果公開を再確認する',()=>{
- const e=world(),g=e.ctx;g.adminStartQuiz(e.token);e.lock.beforeAcquire=()=>g.adminPublishResults(e.token);
+test('結果公開のあとはクイズを受け付けない(キャッシュではなくシートで確かめる)',()=>{
+ const e=world(),g=e.ctx;g.adminStartQuiz(e.token);g.getState();g.adminPublishResults(e.token);
+ e.ctx.CacheService.getScriptCache().remove('tbl:状態'); // 古い状態がキャッシュに残っていても
  assert.equal(g.submitQuiz('P01',{names:[],origin:''}).error.code,'QUIZ_CLOSED');
- e.lock.held=true;assert.equal(g.submitPrediction('P01','V-SF1','A').error.code,'BUSY');
+});
+test('30人が同時に書く操作は、ほかの人がロックを持っていても待たずに通る',()=>{
+ const e=world(),g=e.ctx;g.adminSetPredictionStatus(e.token,'V-SF1','受付中');g.adminStartQuiz(e.token);
+ e.lock.held=true; // 運営などがロックを持っている状態
+ assert.equal(g.selectSelf('P01').ok,true);
+ assert.equal(g.saveIntro('P01',{sports:['バスケ'],comment:'よろしく',snsConsent:'載せない'}).ok,true);
+ assert.equal(g.startQuiz('P01').ok,true);
+ assert.equal(g.submitQuiz('P01',{names:[],origin:''}).ok,true);
+ assert.equal(g.submitSurvey({fun:5,talked:4,again:'はい'}).ok,true);
+ e.lock.held=false;
+});
+test('予想を送り直したら最新の1件だけ数える・クイズの二重送信は最初の1件だけ',()=>{
+ const e=world(),g=e.ctx;
+ // 予想する側(試合に出ないチーム)を作る:V-SF1 の対戦チーム以外のC
+ g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
+ const m=match(e,'V-SF1');const pick=[m.team1,m.team2];
+ g.selectSelf('P01');g.selectSelf('P02');
+ assert.equal(g.submitPrediction('P01','V-SF1',pick[0]).ok,true);
+ assert.equal(g.submitPrediction('P01','V-SF1',pick[1]).ok,true);
+ const mine=g.readPredictions_(true).filter(p=>p.participantId==='P01'&&p.matchId==='V-SF1');
+ assert.equal(mine.length,1);assert.equal(mine[0].choice,pick[1]);
+ g.adminStartQuiz(e.token);g.startQuiz('P03');
+ assert.equal(g.submitQuiz('P03',{names:['架空 一'],origin:''}).ok,true);
+ // 送り直しの行が足されても、読むときは最初の行
+ g.appendRowNoLock_('クイズ回答',{'参加者ID':'P03','書いた人数':0,'正解と判定した人のID':'','名前の正答率':0,'送信時刻':new Date()});
+ g.CacheService.getScriptCache().remove('tbl:クイズ回答');
+ const a=g.readQuizAnswers_(true).filter(x=>x.participantId==='P03');
+ assert.equal(a.length,1);assert.equal(a[0].writtenCount,1);
 });
 test('お題は1〜3の整数のみ・集計は範囲外と重複を除外',()=>{
  const e=world(),g=e.ctx;for(const n of [4,1.5])assert.equal(g.adminSaveOdai(e.token,{number:n,team:'C',matched:3,answered:3}).ok,false);

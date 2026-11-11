@@ -215,6 +215,18 @@ function appendRows_(name, objs) {
   sh.getRange(sh.getLastRow() + 1, 1, data.length, headers.length).setValues(data);
 }
 
+/**
+ * 1行を下に足す(ロックなしで使える)。Sheet.appendRow は同時に呼ばれても行が重ならない。
+ * 30人が同時に送る場面(予想・クイズ回答・アンケート)で、順番待ちをなくすために使う。
+ * 見出しはキャッシュから読む(見出しの行は本番中に変えない前提)
+ */
+function appendRowNoLock_(name, obj) {
+  var sh = sheet_(name);
+  var headers = readTable_(name).headers;
+  if (!headers.length) headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(toStr_);
+  sh.appendRow(headers.map(function (h) { return (h in obj) ? cellSafe_(obj[h]) : ''; }));
+}
+
 /** キーと値のシート(状態・設定)を { キー: 値 } で読む */
 function readKeyValues_(name, fresh) {
   var t = readTable_(name, fresh);

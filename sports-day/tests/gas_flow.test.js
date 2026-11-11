@@ -94,7 +94,8 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   ok(g.saveIntro('P02', { sports: ['バレー', 'バスケ', 'バスケ'], comment: '犬を飼ってる', snsConsent: '載せない' }));
   assert.equal(g.saveIntro('P02', { sports: ['特になし', 'バスケ'], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
   assert.equal(g.saveIntro('P02', { sports: [], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
-  assert.equal(roster.getSheetByName('自己紹介').getLastRow(), 3); // 上書き
+  assert.equal(roster.getSheetByName('自己紹介').getLastRow(), 5); // ロックなしで行を足す(4回保存)。読むときは最新の行
+  assert.equal(ok(g.getIntro('P02')).intro.sport, 'バスケ・バレー');
   assert.equal(ok(g.getIntro('P01')).intro.sport, 'バレー');
 
   // 予想(V-SF1 は A-B。予想するのは C・D)

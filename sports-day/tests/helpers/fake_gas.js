@@ -56,6 +56,7 @@ class FakeSheet {
   }
   getDataRange() { return new FakeRange(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
   setFrozenRows() {}
+  appendRow(vals) { const r = this.getLastRow() + 1; vals.forEach((v, i) => this.set(r, i + 1, v)); return this; }
 }
 
 class FakeSpreadsheet {

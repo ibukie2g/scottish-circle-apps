@@ -92,17 +92,22 @@ function listTeamMembers(team) {
 function selectSelf(participantId) {
   return api_(function () {
     var p = requireParticipant_(participantId);
-    if (p.arrivedAt === null) {
-      withLock_(function () {
-        var cur = requireParticipant_(participantId, true);
-        if (cur.arrivedAt === null) {
-          updateRow_(SH_PARTICIPANTS, cur._row, { '来場時刻': new Date() });
-          invalidate_([SH_PARTICIPANTS]);
-        }
-      });
-    }
+    if (p.arrivedAt === null) markArrived_(p);
     return meView_(p.id);
   });
+}
+
+/**
+ * 来場時刻を記録する(ロックなし。30人が同時に名前を選んでも待たせない)
+ * 参加者シートの行は下に足すだけで動かないので、その人の行の1マスだけを書く。
+ * キャッシュの目印で、同じ人が続けて押しても1回だけ書く(運営が来場を消したら目印も消す)
+ */
+function markArrived_(p) {
+  var key = 'arrived:' + p.id;
+  if (cache_().get(key)) return;
+  cache_().put(key, '1', NEAR_CACHE_SEC);
+  updateRow_(SH_PARTICIPANTS, p._row, { '来場時刻': new Date() });
+  invalidate_([SH_PARTICIPANTS]);
 }
 
 function meView_(id) {
@@ -147,9 +152,8 @@ function saveIntro(participantId, intro) {
     if (Array.from(comment).length > INTRO_COMMENT_MAX) throw appError_('INVALID', 'ひとことは' + INTRO_COMMENT_MAX + '字までです');
     if (Array.from(nickname).length > INTRO_NICKNAME_MAX) throw appError_('INVALID', 'あだ名は' + INTRO_NICKNAME_MAX + '字までです');
     if (INTRO_SNS.indexOf(sns) < 0) throw appError_('INVALID', '写真のSNS掲載について選んでください');
-    withLock_(function () {
-      writeIntro_(p.id, { sport: sport, comment: comment, nickname: nickname, snsConsent: sns });
-    });
+    // ロックなしで行を足す(読むときは同じ人の下の行=最新を使う)
+    writeIntro_(p.id, { sport: sport, comment: comment, nickname: nickname, snsConsent: sns });
     return { saved: true };
   });
 }
@@ -168,11 +172,13 @@ function getPrediction(participantId, matchId) {
 }
 
 function predictionView_(participantId, matchId, fresh) {
-  var parts = readParticipants_(fresh);
+  // fresh は「予想」と「予想公開」だけに使う(30人が同時に送るので、読み直すシートを少なくする)。
+  // 参加者・状態・試合は、運営が書くたびにキャッシュが消えるので、キャッシュで十分
+  var parts = readParticipants_();
   var me = findParticipant_(parts, toStr_(participantId));
   if (!me) throw appError_('NOT_FOUND', '参加者が見つかりません。名前を選び直してください');
-  var mid = toStr_(matchId) || readState_(fresh).predictionMatchId;
-  var m = mid ? findMatchById_(readMatches_(fresh), mid) : null;
+  var mid = toStr_(matchId) || readState_().predictionMatchId;
+  var m = mid ? findMatchById_(readMatches_(), mid) : null;
   var view = {
     match: m ? matchView_(m) : null,
     myTeam: me.team,
@@ -217,7 +223,8 @@ function predictionView_(participantId, matchId, fresh) {
 function submitPrediction(participantId, matchId, winnerTeam) {
   return api_(function () {
     var winner = normTeam_(winnerTeam);
-    return withLock_(function () {
+    // ロックなし:行を足すだけにして、読むときに同じ人・同じ試合の最新の行を使う(30人同時でも待たせない)
+    return (function () {
       var view = predictionView_(participantId, matchId, true);
       if (!view.canPredict) {
         var msg = {
@@ -230,18 +237,13 @@ function submitPrediction(participantId, matchId, winnerTeam) {
       var m = view.match;
       if (winner !== m.team1 && winner !== m.team2) throw appError_('INVALID', '勝つチームは ' + m.team1 + ' か ' + m.team2 + ' です');
       var pid = toStr_(participantId);
-      var existing = readPredictions_(true).filter(function (p) { return p.matchId === m.id && p.participantId === pid; })[0];
-      if (existing) {
-        updateRow_(SH_PREDICTIONS, existing._row, { 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
-      } else {
-        appendRows_(SH_PREDICTIONS, [{ '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() }]);
-      }
+      appendRowNoLock_(SH_PREDICTIONS, { '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
+      invalidate_([SH_PREDICTIONS]);
       // 予想した人は来ている
-      var me = requireParticipant_(pid, true);
-      if (me.arrivedAt === null) updateRow_(SH_PARTICIPANTS, me._row, { '来場時刻': new Date() });
-      invalidate_([SH_PREDICTIONS, SH_PARTICIPANTS]);
+      var me = requireParticipant_(pid);
+      if (me.arrivedAt === null) markArrived_(me);
       return predictionView_(pid, m.id, true);
-    });
+    })();
   });
 }
 
@@ -348,15 +350,16 @@ function submitQuiz(participantId, answers) {
       return toStr_(s).slice(0, 40);
     });
     var originAns = toStr_(answers.origin);
-    if (readState_().mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
-    return withLock_(function () {
-      if (readState_(true).mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
-      requireParticipant_(pid, true);
+    // 締め切りで全員が同時に送るので、ロックは「惜しい答え」の番号を振るところだけにする。
+    // 回答は行を足すだけ(読むときは同じ人の最初の行を使う)
+    if (readState_(true).mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
+    return (function () {
+      requireParticipant_(pid);
       if (findBy_(readQuizAnswers_(true), pid)) return quizResult_(pid, true); // 再送:最初の回答のまま
-      var q = findBy_(readQuizQuestions_(true), pid);
+      var q = findBy_(readQuizQuestions_(), pid) || findBy_(readQuizQuestions_(true), pid);
       if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
       if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
-      var people = readPeople_(true);
+      var people = readPeople_();
       var members = q.nameTargets.map(function (id) {
         var p = people[id] || {};
         return { id: id, name: p.name || '', kana: p.kana || '' };
@@ -365,25 +368,30 @@ function submitQuiz(participantId, answers) {
       var originCorrect = '';
       if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
       cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
-      appendRows_(SH_QUIZ_A, [{
+      appendRowNoLock_(SH_QUIZ_A, {
         '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.correctIds.join(','),
         '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
         '送信時刻': new Date()
-      }]);
+      });
       if (j.nearMisses.length) {
-        var nums = readNearMisses_(true).map(function (n) { return n.number; });
-        var next = nums.length ? Math.max.apply(null, nums) + 1 : 1;
-        var rows = j.nearMisses.map(function (nm) {
-          var no = next++;
-          // 入力そのものはシートに書かず、キャッシュにだけ置く
-          cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
-          return { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING };
+        // 番号を重ねないために、ここだけロックを取る(惜しい答えがある人だけなので少ない)
+        withLock_(function () {
+          var near = readNearMisses_(true);
+          if (near.some(function (n) { return n.participantId === pid; })) return; // 送り直しで二重にしない
+          var nums = near.map(function (n) { return n.number; });
+          var next = nums.length ? Math.max.apply(null, nums) + 1 : 1;
+          var rows = j.nearMisses.map(function (nm) {
+            var no = next++;
+            // 入力そのものはシートに書かず、キャッシュにだけ置く
+            cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
+            return { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING };
+          });
+          appendRows_(SH_NEAR, rows);
         });
-        appendRows_(SH_NEAR, rows);
       }
       invalidate_([SH_QUIZ_A, SH_NEAR]);
       return quizResult_(pid, true);
-    });
+    })();
   });
 }
 
@@ -392,8 +400,9 @@ function quizResult_(pid, fresh) {
   var a = findBy_(readQuizAnswers_(fresh), pid);
   var q = findBy_(readQuizQuestions_(fresh), pid);
   if (!a || !q) return null;
-  var people = readPeople_(fresh);
-  var intros = readIntros_(fresh);
+  // 名簿と自己紹介はクイズ中に変わらないので、キャッシュを使う(名簿ファイルを開き直さない)
+  var people = readPeople_();
+  var intros = readIntros_();
   var pending = readNearMisses_(fresh).filter(function (n) {
     return n.participantId === pid && n.judgement === JUDGE_PENDING;
   }).map(function (n) { return n.candidateId; });
@@ -454,13 +463,11 @@ function submitSurvey(survey) {
       if (v === null || v < 1 || v > 5 || Math.floor(v) !== v) throw appError_('INVALID', '1〜5で選んでください');
     });
     if (['はい', 'いいえ'].indexOf(again) < 0) throw appError_('INVALID', '「また参加したいか」を選んでください');
-    withLock_(function () {
-      appendRows_(SH_SURVEY, [{
-        '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
-        'また参加したいか': again, '自由記述': comment
-      }]);
-      invalidate_([SH_SURVEY]);
+    appendRowNoLock_(SH_SURVEY, {
+      '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
+      'また参加したいか': again, '自由記述': comment
     });
+    invalidate_([SH_SURVEY]);
     return { saved: true };
   });
 }

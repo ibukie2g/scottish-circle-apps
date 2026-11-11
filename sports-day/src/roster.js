@@ -142,17 +142,15 @@ function readIntros_(fresh) {
   return out;
 }
 
-/** 自己紹介を保存(上書き)。ロックの中で使う。運営が足したほかの列は消さない */
+/**
+ * 自己紹介を保存する。ロックなしで、いつも下に1行足す(Sheet.appendRow は同時に呼ばれても重ならない)。
+ * 読むとき(readIntros_)は同じ人の下の行=最新を使う。書き直した人は古い行も残る
+ */
 function writeIntro_(id, intro) {
   var sh = rosterSheet_(rosterSs_(), ROSTER_INTRO_SHEET);
-  var v = sh.getDataRange().getValues();
-  var h = v[0];
-  var idCol = findCol_(h, '参加者ID');
-  if (idCol < 0) throw appError_('SETUP', '名簿ファイルの「自己紹介」シートに「参加者ID」列がありません');
-  var target = -1;
-  for (var i = 1; i < v.length; i++) if (toStr_(v[i][idCol]) === id) { target = i + 1; break; }
-  var row = target > 0 ? v[target - 1].slice() : h.map(function () { return ''; });
-  if (target < 0) target = sh.getLastRow() + 1;
+  var h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  if (findCol_(h, '参加者ID') < 0) throw appError_('SETUP', '名簿ファイルの「自己紹介」シートに「参加者ID」列がありません');
+  var row = h.map(function () { return ''; });
   var put = {
     '参加者ID': id,
     'やっていたスポーツ': intro.sport,
@@ -165,7 +163,7 @@ function writeIntro_(id, intro) {
     var c = findCol_(h, k);
     if (c >= 0) row[c] = cellSafe_(put[k]);
   });
-  sh.getRange(target, 1, 1, row.length).setValues([row]);
+  sh.appendRow(row);
   cache_().remove('intros:v1');
 }
 

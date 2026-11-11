@@ -112,7 +112,11 @@ function readPredictions_(fresh) {
       choice: normTeam_(r['予想(勝つチーム)']),
       _row: r._row
     };
-  }).filter(function (p) { return p.matchId && p.participantId && p.choice; });
+  }).filter(function (p) { return p.matchId && p.participantId && p.choice; }).filter(function (p, i, all) {
+    // 予想はロックなしで行を足していくので、同じ人・同じ試合は下の行(最新)だけを使う
+    for (var k = i + 1; k < all.length; k++) if (all[k].matchId === p.matchId && all[k].participantId === p.participantId) return false;
+    return true;
+  });
 }
 
 function readQuizQuestions_(fresh) {
@@ -143,7 +147,11 @@ function readQuizAnswers_(fresh) {
       submittedAt: toMs_(r['送信時刻']),
       _row: r._row
     };
-  }).filter(function (a) { return a.participantId; });
+  }).filter(function (a) { return a.participantId; }).filter(function (a, i, all) {
+    // 回答はロックなしで行を足すので、同じ人が2回送れても最初の行だけを使う
+    for (var k = 0; k < i; k++) if (all[k].participantId === a.participantId) return false;
+    return true;
+  });
 }
 
 function readNearMisses_(fresh) {

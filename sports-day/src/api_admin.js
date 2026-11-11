@@ -482,6 +482,7 @@ function adminSetQuizInclude(token, participantId, include) {
 /** 来場の記録をつける/消す(スマホを持っていない人など) */
 function adminSetArrived(token, participantId, arrived) {
   return adminApi_(token, function () {
+    cache_().remove('arrived:' + toStr_(participantId)); // 参加者側の「記録済み」の目印も消す
     return updateParticipant_(toStr_(participantId), { '来場時刻': arrived ? new Date() : '' });
   });
 }
