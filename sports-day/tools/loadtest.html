@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>負荷テスト</title>
+<style>
+body{font-family:sans-serif;margin:16px;font-size:14px}
+button{font-size:15px;padding:8px 12px;margin:4px}
+pre{background:#f4f4f4;padding:8px;white-space:pre-wrap;font-size:13px}
+</style>
+</head>
+<body>
+<!-- 負荷テスト用ページ。使うときだけ src/ にコピーし、main.js の doGet に「?page=loadtest なら createHtmlOutputFromFile('loadtest')」を一時的に足して clasp push し、/dev のURLで開く。終わったら両方消す。テスト用の名簿(P01〜P30)で使う -->
+<h3>負荷テスト(テスト用名簿 P01〜P30 で使う)</h3>
+<div>
+<button onclick="runAll()">全部まとめて</button>
+<button onclick="run(burstStart)">1. 開いた直後</button>
+<button onclick="run(burstSelect)">2. 名前を選ぶ</button>
+<button onclick="run(burstIntro)">3. 自己紹介を保存</button>
+<button onclick="run(pollTest)">4. 4秒ごとの更新を40秒</button>
+<button onclick="run(burstPredict)">5. 予想を送る(予想モードで)</button>
+<button onclick="run(burstQuiz)">6. クイズ開始と送信(クイズモードで)</button>
+<button onclick="run(burstSurvey)">7. アンケート</button>
+</div>
+<pre id="out">待機中</pre>
+<script>
+var N = 30, PIDS = [];
+for (var i = 1; i <= 30; i++) PIDS.push('P' + ('0' + i).slice(-2));
+var TEAMS = ['A', 'B', 'C', 'D'];
+var out = document.getElementById('out');
+function log(s) { out.textContent += '\n' + s; }
+
+function call(name, args) {
+  var t0 = performance.now();
+  return new Promise(function (resolve) {
+    var r = google.script.run
+      .withSuccessHandler(function (res) { resolve({ ms: performance.now() - t0, ok: !!(res && res.ok), err: res && res.error && res.error.code }); })
+      .withFailureHandler(function (e) { resolve({ ms: performance.now() - t0, ok: false, err: 'FAIL:' + (e && e.message || e) }); });
+    r[name].apply(r, args || []);
+  });
+}
+function stats(label, rs, wall) {
+  var ms = rs.map(function (r) { return r.ms; }).sort(function (a, b) { return a - b; });
+  var q = function (p) { return Math.round(ms[Math.min(ms.length - 1, Math.floor(ms.length * p))]) ; };
+  var bad = rs.filter(function (r) { return !r.ok; });
+  var errs = {};
+  bad.forEach(function (r) { errs[r.err] = (errs[r.err] || 0) + 1; });
+  log(label + ': ' + rs.length + '回 / 失敗 ' + bad.length + (bad.length ? ' ' + JSON.stringify(errs) : '') +
+    ' / 中央 ' + q(0.5) + 'ms・90% ' + q(0.9) + 'ms・最大 ' + Math.round(ms[ms.length - 1]) + 'ms' +
+    (wall ? ' / 全体 ' + Math.round(wall) + 'ms' : ''));
+}
+function burst(label, make) {
+  var t0 = performance.now(), ps = [];
+  for (var i = 0; i < N; i++) ps.push(make(i));
+  return Promise.all(ps).then(function (rs) { stats(label, rs, performance.now() - t0); });
+}
+function burstStart() {
+  return burst('1a. 状態(getState)30人同時', function () { return call('getState'); })
+    .then(function () { return burst('1b. 名前一覧(listTeamMembers)30人同時', function (i) { return call('listTeamMembers', [TEAMS[i % 4]]); }); });
+}
+function burstSelect() {
+  return burst('2. 名前を選ぶ(selectSelf)30人同時', function (i) { return call('selectSelf', [PIDS[i]]); });
+}
+function burstIntro() {
+  return burst('3. 自己紹介の保存(saveIntro)30人同時', function (i) {
+    return call('saveIntro', [PIDS[i], { sports: ['バスケ'], comment: 'テスト' + i, nickname: '', snsConsent: '載せない' }]);
+  });
+}
+function pollTest() {
+  // 30人が、それぞれ0〜4秒ずらして4秒ごとに getState を呼ぶ(40秒)
+  var rs = [], end = performance.now() + 40000;
+  function user(i) {
+    return new Promise(function (resolve) {
+      function tick() {
+        if (performance.now() > end) return resolve();
+        call('getState').then(function (r) { rs.push(r); setTimeout(tick, 4000); });
+      }
+      setTimeout(tick, Math.random() * 4000);
+    });
+  }
+  var us = [];
+  for (var i = 0; i < N; i++) us.push(user(i));
+  return Promise.all(us).then(function () { stats('4. 4秒ごとの更新(30人×40秒)', rs); });
+}
+// 予想:V-SF1(A対B)を予想できる C・D の人(15人)が、それぞれ2回送る
+var CD = ['P09','P10','P11','P12','P13','P14','P15','P16','P24','P25','P26','P27','P28','P29','P30'];
+function burstPredict() {
+  return burst('5. 予想を送る(submitPrediction)30回同時', function (i) { return call('submitPrediction', [CD[i % 15], 'V-SF1', i < 15 ? 'A' : 'B']); });
+}
+function burstQuiz() {
+  return burst('6a. クイズを開く(startQuiz)30人同時', function (i) { return call('startQuiz', [PIDS[i]]); })
+    .then(function () { return burst('6b. クイズを送る(submitQuiz)30人同時', function (i) { return call('submitQuiz', [PIDS[i], { names: ['架空 太郎', '試験 はなこ', 'みほん いちろ'], origin: '福島県' }]); }); });
+}
+function burstSurvey() {
+  return burst('7. アンケート(submitSurvey)30人同時', function (i) { return call('submitSurvey', [{ fun: 5, talked: 4, again: 'はい', comment: 'テスト' + i }, PIDS[i]]); });
+}
+var busy = false;
+function run(fn) {
+  if (busy) return;
+  busy = true;
+  log('--- 開始 ' + new Date().toLocaleTimeString());
+  fn().then(function () { log('--- 終了'); busy = false; });
+}
+function runAll() {
+  run(function () { return burstStart().then(burstSelect).then(burstIntro).then(pollTest); });
+}
+</script>
+</body>
+</html>

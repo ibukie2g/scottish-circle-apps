@@ -242,10 +242,10 @@ data = {
 data = { answered: true | false, result: null | (submitQuiz の data と同じ形) }
 ```
 
-### submitSurvey(survey)
-アンケート(匿名。参加者IDは渡さない)。二重送信は端末側で防ぐ(送ったら localStorage に記録)。
+### submitSurvey(survey, participantId)
+アンケート(運営だけが見る。名前は保存せず参加者IDだけ。2026-11-11 に匿名をやめた)。二重送信は端末側で防ぐ(送ったら localStorage に記録)。名前を選んでいない端末は participantId を空にする。
 ```js
-submitSurvey({ fun: 5, talked: 4, again: 'はい', comment: '楽しかった' })
+submitSurvey({ fun: 5, talked: 4, again: 'はい', comment: '楽しかった' }, 'P07')
 data = { saved: true }
 ```
 - `fun`(今日は楽しかったですか？)・`talked`(普段あまり話さない人と話せましたか？):1〜5 の整数

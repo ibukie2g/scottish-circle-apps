@@ -475,10 +475,12 @@ function getQuizResult(participantId) {
 // ============ アンケート ============
 
 /**
- * アンケート(匿名。参加者IDは受け取らない)
+ * アンケート。回答は運営だけが見る(2026-11-11 決定:匿名にはしない。名前は保存せず、参加者IDだけ)
+ * 30人が同時に送っても待たせないように、その人専用の行に書く(送り直したら上書き)
  * @param {{fun:number, talked:number, again:string, comment?:string}} survey again は 'はい' か 'いいえ'
+ * @param {string} [participantId] 名前を選んでいない端末からは来ない。そのときはロックを取って下に足す
  */
-function submitSurvey(survey) {
+function submitSurvey(survey, participantId) {
   return api_(function () {
     survey = survey || {};
     var fun = toNumOrNull_(survey.fun);
@@ -489,14 +491,19 @@ function submitSurvey(survey) {
       if (v === null || v < 1 || v > 5 || Math.floor(v) !== v) throw appError_('INVALID', '1〜5で選んでください');
     });
     if (['はい', 'いいえ'].indexOf(again) < 0) throw appError_('INVALID', '「また参加したいか」を選んでください');
-    // 匿名なので自分専用の行が決められない。ロックを取って下に足す(ロックの中は書くだけにして短くする)
-    withLock_(function () {
-      appendRows_(SH_SURVEY, [{
-        '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
-        'また参加したいか': again, '自由記述': comment
-      }]);
-      invalidate_([SH_SURVEY]);
-    });
+    var row = {
+      '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
+      'また参加したいか': again, '自由記述': comment
+    };
+    var pid = toStr_(participantId);
+    var me = pid ? findParticipant_(readParticipants_(), pid) : null;
+    if (me) {
+      row['参加者ID'] = pid;
+      writeSlotRow_(sheet_(SH_SURVEY), slotRow_(me), { '参加者ID': pid }, row);
+    } else {
+      withLock_(function () { appendRows_(SH_SURVEY, [row]); });
+    }
+    invalidate_([SH_SURVEY]);
     return { saved: true };
   });
 }

@@ -231,9 +231,11 @@ function writeSlotRow_(sh, row, keys, obj) {
   var line = headers.map(function (h) { return (h in obj) ? cellSafe_(obj[h]) : ''; });
   if (row >= 2 && row <= sh.getMaxRows()) {
     var cur = sh.getRange(row, 1, 1, headers.length).getValues()[0];
-    var mine = Object.keys(keys).every(function (k) {
-      var v = toStr_(cur[headers.indexOf(k)]);
-      return v === '' || v === toStr_(keys[k]);
+    // 使ってよいのは、行がまるごと空か、持ち主の列がすべて自分と同じとき
+    var blank = cur.every(function (v) { return toStr_(v) === ''; });
+    var mine = blank || Object.keys(keys).every(function (k) {
+      var c = headers.indexOf(k);
+      return c >= 0 && toStr_(cur[c]) === toStr_(keys[k]);
     });
     if (mine) {
       sh.getRange(row, 1, 1, headers.length).setValues([line]);

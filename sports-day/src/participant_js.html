@@ -831,7 +831,7 @@
       '<textarea class="textarea" data-in="surveyComment" maxlength="1000" placeholder="なんでもどうぞ!">' + esc(s.comment) + '</textarea></div>';
     h += '<div id="surveyErr" class="err">' + esc(s.err) + '</div>';
     h += '<button type="button" class="btn" data-act="sendSurvey"' + (s.sending ? ' disabled' : '') + '>' + (s.sending ? '送信中…' : '送信する') + '</button>';
-    h += '<p class="muted small center" style="margin:0">名前は記録しません(匿名)</p></div>';
+    h += '<p class="muted small center" style="margin:0">回答は運営だけが見ます</p></div>';
     h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
     return h;
   };
@@ -841,7 +841,7 @@
     if (!s.fun || !s.talked || !s.again) { s.err = '1〜3に答えてね'; render(true); return; }
     s.sending = true; s.err = '';
     render(true);
-    call('submitSurvey', [{ fun: s.fun, talked: s.talked, again: s.again, comment: s.comment.trim() }], function () {
+    call('submitSurvey', [{ fun: s.fun, talked: s.talked, again: s.again, comment: s.comment.trim() }, S.pid || ''], function () {
       s.sending = false;
       store.set('surveyDone', true);
       S.sub = 'thanks';

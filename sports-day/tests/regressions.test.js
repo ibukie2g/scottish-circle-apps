@@ -134,3 +134,12 @@ test('自分専用の行にほかの人のデータがあれば、上書きせ�
  assert.equal(sh.data[1][2],'ほかの人');
  assert.equal(g.getIntro('P01').data.intro.comment,'一');
 });
+test('アンケートは自分専用の行に書き、名前を選んでいない端末の回答は上書きしない',()=>{
+ const e=world(),g=e.ctx,sh=e.app.getSheetByName('アンケート');
+ assert.equal(g.submitSurvey({fun:5,talked:4,again:'はい'},'P02').ok,true);
+ const h=sh.data[0];assert.equal(sh.data[2][h.indexOf('参加者ID')],'P02'); // P02 は3行目
+ assert.equal(g.submitSurvey({fun:3,talked:3,again:'いいえ'},'').ok,true); // 名前なし → 下に足す(4行目)
+ assert.equal(g.submitSurvey({fun:4,talked:4,again:'はい'},'P03').ok,true); // P03 の行(4行目)は使われているので下に足す
+ assert.equal(sh.data[3][h.indexOf('また参加したいか')],'いいえ');
+ assert.equal(sh.getLastRow(),5);
+});
