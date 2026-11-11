@@ -81,3 +81,8 @@ test('ふだんの状態取得と予想の取得ではロックを取らない(3
  for(let i=0;i<5;i++){g.getState();g.getPrediction('P01','V-SF1');}
  e.lock.tryLock=orig;assert.equal(n,0);
 });
+test('HTMLの<script>の行に // コメントを書かない(GASが行末まで消して </script> も消え、画面が動かなくなる)',()=>{
+ const fs=require('fs'),path=require('path'),dir=path.join(__dirname,'..','src');
+ const bad=fs.readdirSync(dir).filter(f=>f.endsWith('.html')).flatMap(f=>fs.readFileSync(path.join(dir,f),'utf8').split(/\r?\n/).map((l,i)=>({f,i:i+1,l}))).filter(x=>/\/\/.*<\/script>/.test(x.l));
+ assert.deepEqual(bad.map(x=>x.f+':'+x.i),[]);
+});

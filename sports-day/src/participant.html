@@ -22,7 +22,8 @@
     <button type="button" class="link-btn" data-act="changeTeam">ほかのチームを選ぶ</button>
   </footer>
   <div id="toast" class="toast" hidden></div>
-  <script>var TEAM = '<?!= team ?>'; // サーバーが検証したチーム(A〜D か '')</script>
+  <!-- サーバーが検証したチーム(A〜D か '')。scriptタグと同じ行に行コメントを書かない(GASが行末まで消し、閉じタグも消える) -->
+  <script>var TEAM = '<?!= team ?>';</script>
   <?!= include('assets') ?>
   <?!= include('participant_js') ?>
 </body>
