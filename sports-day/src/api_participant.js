@@ -15,8 +15,7 @@ function getState() {
 }
 
 function stateData_() {
-  var c = cacheGetJson_('state:v1');
-  if (c) return c;
+  // シート読み取りだけを10秒キャッシュする。
   var st = readState_();
   var settings = readSettings_();
   var scores = buildScores_();
@@ -42,7 +41,7 @@ function stateData_() {
   }
   if (st.mode === 'クイズ' && st.quizStartedAt) out.quiz = quizTiming_(st, settings);
   if (st.mode === '結果公開') out.results = resultsView_(scores);
-  cachePutJson_('state:v1', out);
+
   return out;
 }
 
@@ -194,7 +193,10 @@ function predictionView_(participantId, matchId, fresh) {
   var done = arrived.filter(function (p) { return predictedIds.indexOf(p.id) >= 0; }).length;
   view.progress = { predicted: done, arrived: arrived.length };
   var teamComplete = arrived.length > 0 && done === arrived.length;
-  view.revealed = m.predictionStatus === '公開' || (m.predictionStatus === '受付中' && teamComplete);
+  // 公開の記録は、まだ記録されていないときだけロックを取って書く(ふだんはロックなしで読む)
+  var shouldPublish = m.predictionStatus === '公開' || (m.predictionStatus === '受付中' && teamComplete);
+  if (shouldPublish && !predictionPublished_(m.id, me.team, fresh)) withLock_(function () { publishPrediction_(m.id, me.team); });
+  view.revealed = shouldPublish || predictionPublished_(m.id, me.team, fresh);
   if (view.revealed && m.team1 && m.team2) {
     var teamPreds = preds.filter(function (p) { return p.team === me.team; });
     view.counts = [m.team1, m.team2].map(function (t) {
@@ -206,7 +208,7 @@ function predictionView_(participantId, matchId, fresh) {
   else if (me.team === m.team1 || me.team === m.team2) view.reason = 'PLAYING';
   else if (m.predictionStatus === '公開') view.reason = 'CLOSED';
   else if (m.predictionStatus !== '受付中') view.reason = 'NOT_OPEN';
-  else if (view.revealed && view.myChoice) view.reason = 'REVEALED';
+  else if (view.revealed) view.reason = 'REVEALED';
   else view.canPredict = true;
   return view;
 }
@@ -268,10 +270,11 @@ function generateQuestion_(pid, parts, people) {
 }
 
 function questionRow_(q) {
+  if (!q.originExpired) cachePutJson_('origin:' + q.participantId, {originTarget:q.originTarget, choices:q.choices, answer:q.answer}, NEAR_CACHE_SEC);
   return {
-    '参加者ID': q.participantId, '名前の対象者ID': q.nameTargets.join(','), '出身地の対象者ID': q.originTarget,
-    '選択肢1': q.choices[0] || '', '選択肢2': q.choices[1] || '', '選択肢3': q.choices[2] || '', '選択肢4': q.choices[3] || '',
-    '正解': q.answer
+    '参加者ID': q.participantId, '名前の対象者ID': q.nameTargets.join(','), '出身地の対象者ID': '',
+    '選択肢1': '', '選択肢2': '', '選択肢3': '', '選択肢4': '',
+    '正解': ''
   };
 }
 
@@ -306,6 +309,7 @@ function startQuiz(participantId) {
         return made;
       });
     }
+    if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
     var people = readPeople_();
     var intros = readIntros_();
     var hints = shuffleCopy_(q.nameTargets).map(function (id) {
@@ -346,10 +350,12 @@ function submitQuiz(participantId, answers) {
     var originAns = toStr_(answers.origin);
     if (readState_().mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
     return withLock_(function () {
+      if (readState_(true).mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
       requireParticipant_(pid, true);
       if (findBy_(readQuizAnswers_(true), pid)) return quizResult_(pid, true); // 再送:最初の回答のまま
       var q = findBy_(readQuizQuestions_(true), pid);
       if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
+      if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
       var people = readPeople_(true);
       var members = q.nameTargets.map(function (id) {
         var p = people[id] || {};
@@ -357,10 +363,11 @@ function submitQuiz(participantId, answers) {
       });
       var j = judgeNames(names, members);
       var originCorrect = '';
-      if (q.originTarget) originCorrect = normalizePrefecture(originAns) === q.answer;
+      if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
+      cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
       appendRows_(SH_QUIZ_A, [{
         '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.correctIds.join(','),
-        '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': originAns, '出身地の正誤': originCorrect,
+        '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
         '送信時刻': new Date()
       }]);
       if (j.nearMisses.length) {

@@ -58,21 +58,36 @@ function requireParticipant_(id, fresh) {
 
 /** 試合シート → core_score.js の試合オブジェクト */
 function readMatches_(fresh) {
-  return readTable_(SH_MATCHES, fresh).rows.map(function (r) {
-    return {
-      id: toStr_(r['試合ID']),
-      sport: toStr_(r['種目']),
-      round: toStr_(r['回']),
-      team1: normTeam_(r['チーム1']),
-      team2: normTeam_(r['チーム2']),
-      score1: toNumOrNull_(r['点数1']),
-      score2: toNumOrNull_(r['点数2']),
-      status: toStr_(r['状態']) === MATCH_CONFIRMED ? MATCH_CONFIRMED : MATCH_PLANNED,
-      predictionStatus: PREDICTION_STATUSES.indexOf(toStr_(r['予想の状態'])) >= 0 ? toStr_(r['予想の状態']) : 'なし',
-      related: toStr_(r['関連試合']),
-      _row: r._row
-    };
-  }).filter(function (m) { return m.id; });
+  // 30人が数秒ごとに読むので、ふだんはロックを取らずに読む。
+  // 決勝・3位決定戦・ドッジの補完が必要なときだけ、ロックを取って書き直す。
+  var matches = parseMatches_(fresh);
+  if (!fillDerivedMatches(matches).changes.length) return matches;
+  return withLock_(function () {
+    var latest = parseMatches_(true);
+    if (applyDerived_(latest).length) return parseMatches_(true);
+    return latest;
+  });
+}
+
+function parseMatches_(fresh) {
+  return (function () {
+    var matches = readTable_(SH_MATCHES, fresh).rows.map(function (r) {
+      return {
+        id: toStr_(r['試合ID']),
+        sport: toStr_(r['種目']),
+        round: toStr_(r['回']),
+        team1: normTeam_(r['チーム1']),
+        team2: normTeam_(r['チーム2']),
+        score1: toNumOrNull_(r['点数1']),
+        score2: toNumOrNull_(r['点数2']),
+        status: toStr_(r['状態']) === MATCH_CONFIRMED ? MATCH_CONFIRMED : MATCH_PLANNED,
+        predictionStatus: PREDICTION_STATUSES.indexOf(toStr_(r['予想の状態'])) >= 0 ? toStr_(r['予想の状態']) : 'なし',
+        related: toStr_(r['関連試合']),
+        _row: r._row
+      };
+    }).filter(function (m) { return m.id; });
+    return matches;
+  })();
 }
 
 function findMatchById_(matches, id) {
@@ -102,12 +117,14 @@ function readPredictions_(fresh) {
 
 function readQuizQuestions_(fresh) {
   return readTable_(SH_QUIZ_Q, fresh).rows.map(function (r) {
+    var origin = cacheGetJson_('origin:' + r['参加者ID']);
     return {
       participantId: toStr_(r['参加者ID']),
       nameTargets: splitIds_(r['名前の対象者ID']),
-      originTarget: toStr_(r['出身地の対象者ID']),
-      choices: [r['選択肢1'], r['選択肢2'], r['選択肢3'], r['選択肢4']].map(toStr_).filter(function (x) { return x; }),
-      answer: toStr_(r['正解']),
+      originTarget: (origin || {}).originTarget || '',
+      choices: (origin || {}).choices || [],
+      answer: (origin || {}).answer || '',
+      originExpired: !origin,
       _row: r._row
     };
   }).filter(function (q) { return q.participantId; });
@@ -121,7 +138,7 @@ function readQuizAnswers_(fresh) {
       writtenCount: toNumOrNull_(r['書いた人数']) || 0,
       correctIds: splitIds_(r['正解と判定した人のID']),
       nameRate: toNumOrNull_(r['名前の正答率']),
-      originAnswer: toStr_(r['出身地の回答']),
+      originAnswer: (cacheGetJson_('originResponse:' + r['参加者ID']) || {}).answer || '',
       originCorrect: oc === '' ? null : toBool_(r['出身地の正誤']),
       submittedAt: toMs_(r['送信時刻']),
       _row: r._row
@@ -155,12 +172,9 @@ function readOdai_(fresh) {
   }).filter(function (o) { return o.number !== null && o.team; });
 }
 
-/** 全部の集計(10秒キャッシュ) */
+/** 全部の集計(元シートだけ10秒キャッシュ) */
 function buildScores_(fresh) {
-  if (!fresh) {
-    var c = cacheGetJson_('scores:v1');
-    if (c) return c;
-  }
+  // 派生値はキャッシュしない。
   var parts = readParticipants_(fresh);
   var byId = {};
   parts.forEach(function (p) { byId[p.id] = p; });
@@ -175,7 +189,7 @@ function buildScores_(fresh) {
     odai: readOdai_(fresh),
     predictions: readPredictions_(fresh)
   });
-  cachePutJson_('scores:v1', result);
+
   return result;
 }
 
@@ -213,4 +227,25 @@ function arrivedMembers_(parts, team) {
 function displayName_(people, id) {
   var p = people[id];
   return p && p.name ? p.name : id;
+}
+
+function clearMatchPredictions_(mid) {
+  [SH_PREDICTIONS, '予想公開'].forEach(function (name) {
+    var t = readTable_(name, true);
+    var keep = t.rows.filter(function (r) { return toStr_(r['試合ID']) !== mid; });
+    if (keep.length === t.rows.length) return;
+    var sh = sheet_(name);
+    if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, t.headers.length).clearContent();
+    appendRows_(name, keep);
+    invalidate_([name]);
+  });
+}
+function predictionPublished_(mid, team, fresh) {
+  return readTable_('予想公開', fresh).rows.some(function (r) { return r['試合ID'] === mid && r['チーム'] === team; });
+}
+function publishPrediction_(mid, team) {
+  if (!predictionPublished_(mid, team, true)) {
+    appendRows_('予想公開', [{'試合ID': mid, 'チーム': team}]);
+    invalidate_(['予想公開']);
+  }
 }

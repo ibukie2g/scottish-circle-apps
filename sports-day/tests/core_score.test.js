@@ -181,12 +181,12 @@ test('クイズ: 回答なしの配列でも0点(0除算にならない)', () =>
 
 test('お題カード: 全員一致2点、それ以外1.5×そろった÷答えた、答えた0人は0点', () => {
   const o = S.computeOdaiPoints([
-    { team: 'A', matched: 8, answered: 8 },
-    { team: 'A', matched: 6, answered: 8 },
-    { team: 'B', matched: 0, answered: 0 },
-    { team: 'B', matched: 3, answered: 0 },
-    { team: 'C', matched: 0, answered: 7 },
-    { team: 'X', matched: 1, answered: 1 }
+    { number: 1, team: 'A', matched: 8, answered: 8 },
+    { number: 2, team: 'A', matched: 6, answered: 8 },
+    { number: 1, team: 'B', matched: 0, answered: 0 },
+    { number: 2, team: 'B', matched: 3, answered: 0 },
+    { number: 1, team: 'C', matched: 0, answered: 7 },
+    { number: 1, team: 'X', matched: 1, answered: 1 }
   ], settings);
   assert.equal(o.A, S.round1(2 + 1.5 * 6 / 8)); // 3.1
   assert.equal(o.B, 0);
@@ -220,7 +220,7 @@ test('computeAll: 合計・運動だけの順位・総合順位', () => {
   const r = S.computeAll({
     matches: ms, settings,
     quizAnswers: [{ team: 'D', include: true, nameRate: 1, originCorrect: true }],
-    odai: [{ team: 'D', matched: 5, answered: 5 }],
+    odai: [{ number: 1, team: 'D', matched: 5, answered: 5 }],
     predictions: []
   });
   assert.deepEqual(pts(r, 'sportsTotal'), { A: 10, B: 7, C: 4, D: 2 });

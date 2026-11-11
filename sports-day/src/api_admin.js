@@ -164,8 +164,10 @@ function applyDerived_(matches) {
   var r = fillDerivedMatches(matches);
   r.changes.forEach(function (c) {
     var m = findMatchById_(matches, c.id);
-    updateRow_(SH_MATCHES, m._row, { 'チーム1': c.team1, 'チーム2': c.team2 });
+    updateRow_(SH_MATCHES, m._row, { 'チーム1': c.team1, 'チーム2': c.team2, '点数1': '', '点数2': '', '状態': MATCH_PLANNED, '予想の状態': m.sport === SPORT_VOLLEY ? '受付前' : 'なし' });
+    clearMatchPredictions_(c.id);
   });
+  if (r.changes.length) invalidate_([SH_MATCHES, SH_PREDICTIONS, '予想公開']);
   return r.changes;
 }
 
@@ -219,6 +221,9 @@ function adminSetPredictionStatus(token, matchId, status) {
       if (!m) throw appError_('NOT_FOUND', '試合ID ' + matchId + ' がありません');
       if (s === '受付中' && (!m.team1 || !m.team2)) throw appError_('INVALID', 'まだ対戦チームが決まっていません');
       updateRow_(SH_MATCHES, m._row, { '予想の状態': s });
+      if (s === '公開') TEAMS.forEach(function (t) {
+        if (t !== m.team1 && t !== m.team2) publishPrediction_(m.id, t);
+      });
       invalidate_([SH_MATCHES]);
       if (s === '受付中') writeState_({ 'モード': '予想', '予想の試合ID': m.id });
       refreshSummary_();
@@ -415,7 +420,7 @@ function adminSaveOdai(token, input) {
     var team = normTeam_(input.team);
     var matched = toNumOrNull_(input.matched);
     var answered = toNumOrNull_(input.answered);
-    if (no === null || no < 1) throw appError_('INVALID', 'お題番号を入れてください');
+    if (no === null || no < 1 || no > 3 || Math.floor(no) !== no) throw appError_('INVALID', 'お題番号を入れてください');
     if (!team) throw appError_('INVALID', 'チームは A〜D です');
     if (matched === null || answered === null || matched < 0 || answered < 0) throw appError_('INVALID', '人数は0以上の数です');
     if (matched > answered) throw appError_('INVALID', 'そろった人数が答えた人数より多いです');

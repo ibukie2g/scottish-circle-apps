@@ -67,22 +67,29 @@ class FakeSpreadsheet {
   setSpreadsheetTimeZone() {}
 }
 
-function makeCache() {
+function makeCache(clock) {
   const m = new Map();
+  const expiry = new Map();
   return {
     store: m,
-    get: k => (m.has(k) ? m.get(k) : null),
-    put: (k, v) => { if (String(v).length > 100000) throw new Error('too big'); m.set(k, String(v)); },
+    get: k => (m.has(k) && expiry.get(k) > clock.now ? m.get(k) : null),
+    put: (k, v, sec = 10) => { expiry.set(k, clock.now + sec * 1000); if (String(v).length > 100000) throw new Error('too big'); m.set(k, String(v)); },
     remove: k => m.delete(k),
     removeAll: ks => ks.forEach(k => m.delete(k)),
-    getAll: ks => { const o = {}; ks.forEach(k => { if (m.has(k)) o[k] = m.get(k); }); return o; }
+    getAll: ks => { const o = {}; ks.forEach(k => { if (m.has(k) && expiry.get(k) > clock.now) o[k] = m.get(k); }); return o; }
   };
 }
 
 function loadGas({ props = {}, user = 'owner@example.com' } = {}) {
   const app = new FakeSpreadsheet();
   const roster = new FakeSpreadsheet();
-  const cache = makeCache();
+  const clock = { now: Date.now(), advance(ms) { this.now += ms; } };
+  const cache = makeCache(clock);
+  const lock = { held: false, beforeAcquire: null, tryLock() {
+    if (this.beforeAcquire) { const fn = this.beforeAcquire; this.beforeAcquire = null; fn(); }
+    if (this.held) return false;
+    this.held = true; return true;
+  }, releaseLock() { this.held = false; } };
   let uuid = 0;
   const ctx = {
     console: { log() {}, error() {} },
@@ -92,7 +99,7 @@ function loadGas({ props = {}, user = 'owner@example.com' } = {}) {
       flush() {}
     },
     CacheService: { getScriptCache: () => cache },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    LockService: { getScriptLock: () => lock },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null) }) },
     Session: {
       getActiveUser: () => ({ getEmail: () => ctx.__activeUser }),
@@ -110,7 +117,7 @@ function loadGas({ props = {}, user = 'owner@example.com' } = {}) {
   fs.readdirSync(dir).filter(f => f.endsWith('.js')).sort().forEach(f => {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
   });
-  return { ctx, app, roster, cache };
+  return { ctx, app, roster, cache, clock, lock };
 }
 
 module.exports = { loadGas, FakeSpreadsheet };

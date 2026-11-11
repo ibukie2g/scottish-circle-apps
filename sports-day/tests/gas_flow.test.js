@@ -145,7 +145,8 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(q1.origin.choices.length, 4);
   assert.ok(['渡辺 太郎', '高橋 健'].includes(q1.origin.targetName));
   const qRow = app.getSheetByName('クイズ問題').data.find(r => r[0] === 'P01');
-  const answer = qRow[7];
+  const answer = g.cacheGetJson_('origin:P01').answer;
+  assert.equal(qRow[7], ''); // 正解はシートに保存しない
   const res = ok(g.submitQuiz('P01', { names: ['ワタナベタロウ', 'たかはしけ'], origin: answer }));
   assert.equal(res.total, 2);
   assert.equal(res.correctCount, 1);

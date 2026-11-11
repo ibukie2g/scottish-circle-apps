@@ -135,12 +135,15 @@ function fillDerivedMatches(matches) {
     if (r1 && r2 && !r1.draw && !r2.draw) {
       set(findMatch_(ms, p + '-F'), r1.winner, r2.winner);
       set(findMatch_(ms, p + '-3RD'), r1.loser, r2.loser);
+    } else {
+      set(findMatch_(ms, p + '-F'), '', '');
+      set(findMatch_(ms, p + '-3RD'), '', '');
     }
   });
   ms.forEach(function (m) {
     if (m.sport !== SPORT_DODGE || !m.related) return;
     var rel = findMatch_(ms, m.related);
-    if (!rel || !rel.team1 || !rel.team2) return;
+    if (!rel || !rel.team1 || !rel.team2) { set(m, '', ''); return; }
     var rest = TEAMS.filter(function (t) { return t !== rel.team1 && t !== rel.team2; });
     if (rest.length === 2) set(m, rest[0], rest[1]);
   });
@@ -311,9 +314,15 @@ function computeQuizPoints(answers, settings) {
  * @param {{team:string, matched:number, answered:number}[]} rows
  */
 function computeOdaiPoints(rows, settings) {
+  var seen = {};
   var out = emptyTeamMap_(0);
   (rows || []).forEach(function (r) {
     if (!(r.team in out)) return;
+    var no = Number(r.number);
+    if (no < 1 || no > 3 || Math.floor(no) !== no) return;
+    var key = r.team + ':' + no;
+    if (seen[key]) return;
+    seen[key] = true;
     var answered = toNum_(r.answered) || 0;
     var matched = toNum_(r.matched) || 0;
     if (answered <= 0) return;

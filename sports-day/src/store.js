@@ -48,14 +48,18 @@ function api_(fn) {
 
 // ---- ロック ----
 
+// 同じ実行内の読み取り整合処理は、呼び出し元が取得済みのロックを共有する。
+var lockDepth_ = 0;
 function withLock_(fn) {
+  if (lockDepth_) return fn();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw appError_('BUSY', '混み合っています。少し待ってからもう一度押してください');
   try {
+    lockDepth_++;
     return fn();
   } finally {
-    SpreadsheetApp.flush();
-    lock.releaseLock();
+    lockDepth_--;
+    try { SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
   }
 }
 
