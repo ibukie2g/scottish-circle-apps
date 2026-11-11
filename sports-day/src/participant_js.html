@@ -1,0 +1,1030 @@
+<script>
+/**
+ * 参加者画面の動き(docs/API.md の関数だけを使う)
+ * - 状態は getState を4秒ごとに取りにいき(人ごとに最初の間隔を0〜4秒ずらす)、mode に合わせて画面を切り替える
+ * - 自分の参加者ID・クイズの答え・答え合わせ・アンケート送信済みは localStorage に置く(使えない環境ではメモリだけ)
+ * - 画面は文字列で組み立てて #app に入れる。入力中の画面(自己紹介・クイズの名前・アンケート)は、ポーリングで描き直さない
+ */
+(function () {
+  'use strict';
+
+  // ============ 小道具 ============
+  var KEY = 'sd26.';
+  var memStore = {};
+  var store = {
+    get: function (k) {
+      try {
+        var v = window.localStorage.getItem(KEY + k);
+        return v === null ? null : JSON.parse(v);
+      } catch (e) {
+        return memStore.hasOwnProperty(k) ? memStore[k] : null;
+      }
+    },
+    set: function (k, v) {
+      memStore[k] = v;
+      try { window.localStorage.setItem(KEY + k, JSON.stringify(v)); } catch (e) { /* 読めない環境ではメモリだけ */ }
+    },
+    del: function (k) {
+      delete memStore[k];
+      try { window.localStorage.removeItem(KEY + k); } catch (e) { /* なにもしない */ }
+    }
+  };
+
+  var TEAMS = ['A', 'B', 'C', 'D'];
+  var TEAM_COLOR = { A: '赤', B: '青', C: '黄', D: '緑' };
+  var ASSET = window.ASSETS || {};
+  var SNS_LABEL = { '顔OK': '顔が写っていてもOK', '顔を隠せばOK': '顔を隠せばOK', '載せない': '載せないでほしい' };
+  var PEOPLE_SVG = '<svg class="people" viewBox="0 0 48 30" aria-hidden="true"><g fill="#6f8a52">' +
+    '<circle cx="11" cy="9" r="5"/><path d="M2 28c0-6 4-10 9-10s9 4 9 10z"/>' +
+    '<circle cx="37" cy="9" r="5"/><path d="M28 28c0-6 4-10 9-10s9 4 9 10z"/>' +
+    '<circle cx="24" cy="7" r="6"/><path d="M13 29c0-7 5-12 11-12s11 5 11 12z"/></g></svg>';
+  var NET_MSG = '通信がうまくいきませんでした。電波のいいところで、もう一度ためしてね';
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function charLen(s) { return (String(s || '').match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/g) || []).length; }
+  function fmt(n) {
+    if (n === null || n === undefined || n === '') return '-';
+    var x = Number(n);
+    return Math.round(x) === x ? String(x) : x.toFixed(1);
+  }
+  function teamLabel(t) { return t ? t + 'チーム' : ''; }
+  function teamPill(t, extra) {
+    return '<span class="pill bg-' + esc(t) + (extra ? ' ' + extra : '') + '">' + esc(teamLabel(t)) + '</span>';
+  }
+  function img(key, cls, alt) {
+    return ASSET[key] ? '<img src="' + ASSET[key] + '" alt="' + esc(alt || '') + '"' + (cls ? ' class="' + cls + '"' : '') + '>' : '';
+  }
+  function hero(key, text, small) {
+    return '<div class="hero' + (small ? ' small' : '') + '">' + img(key, '', '') +
+      (text ? '<div class="bubble">' + text + '</div>' : '') + '</div>';
+  }
+  function spinner(text) { return '<div class="loading"><div class="spinner"></div><p>' + esc(text || '読み込み中…') + '</p></div>'; }
+  function rand(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function $(id) { return document.getElementById(id); }
+
+  // 種目名からアイコン(「バド+ドッジ」なら2つ)
+  function eventIcons(name) {
+    var s = String(name || ''), out = '';
+    if (s.indexOf('バスケ') >= 0) out += img('icon_basket', '', 'バスケ');
+    if (s.indexOf('バド') >= 0) out += img('icon_badminton', '', 'バドミントン');
+    if (s.indexOf('ドッジ') >= 0) out += img('icon_dodge', '', 'ドッジボール');
+    if (s.indexOf('バレー') >= 0) out += img('icon_volley', '', 'バレー');
+    return out;
+  }
+
+  // ============ サーバーを呼ぶ ============
+  /**
+   * google.script.run の薄い包み。onOk(data) / onErr({code, message, network})
+   * 返事が来ないまま固まらないように、一定時間で失敗扱いにする(遅れて届いた成功は受け取る)
+   */
+  function call(name, args, onOk, onErr, timeoutMs) {
+    var failed = false;
+    var timer = setTimeout(function () {
+      failed = true;
+      onErr({ code: 'NETWORK', message: NET_MSG, network: true });
+    }, timeoutMs || 25000);
+    function fail(err) {
+      clearTimeout(timer);
+      if (failed) return;
+      failed = true;
+      onErr(err);
+    }
+    if (!(window.google && google.script && google.script.run)) {
+      return fail({ code: 'NETWORK', message: NET_MSG, network: true });
+    }
+    var r = google.script.run
+      .withSuccessHandler(function (res) {
+        clearTimeout(timer);
+        if (res && res.ok) { onOk(res.data); return; }
+        if (failed) return;
+        failed = true;
+        onErr((res && res.error) || { code: 'INTERNAL', message: 'うまくいきませんでした。もう一度ためしてね' });
+      })
+      .withFailureHandler(function () { fail({ code: 'NETWORK', message: NET_MSG, network: true }); });
+    r[name].apply(r, args || []);
+  }
+
+  // ============ 状態 ============
+  var S = {
+    pid: store.get('pid'),
+    me: store.get('me'),           // { id, name, kana, team, introDone }
+    state: null,                   // getState の data
+    offset: 0,                     // サーバー時刻 - 端末時刻
+    sub: null,                     // 自分で開いた画面: teams / names / intro / review / survey / thanks
+    pickTeam: '',                  // 名前を選ぶチーム
+    members: null,                 // { team, list, err, loading }
+    intro: null,                   // 自己紹介の入力内容
+    pred: null,                    // getPrediction の data
+    predBusy: false, predSending: '', predErr: '',
+    quiz: null,                    // { key, phase, data, names, origin, result, err, needRestart }
+    review: null,                  // { loading, err }
+    survey: { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false },
+    lastView: '', lastHtml: '', banner: ''
+  };
+  if (S.me && S.me.id !== S.pid) S.me = null;
+
+  function surveyDone() { return !!store.get('surveyDone'); }
+  function myResult() { return S.pid ? store.get('qres.' + S.pid) : null; }
+  function serverNow() { return Date.now() + S.offset; }
+  function mode() { return S.state ? S.state.mode : ''; }
+
+  function setMe(d) {
+    S.pid = d.id;
+    S.me = { id: d.id, name: d.name, kana: d.kana, team: d.team, introDone: !!d.introDone };
+    store.set('pid', S.pid);
+    store.set('me', S.me);
+  }
+  function resetPid(msg) {
+    store.del('pid'); store.del('me');
+    S.pid = null; S.me = null; S.sub = null; S.pred = null; S.quiz = null; S.intro = null;
+    S.pickTeam = TEAM || '';
+    if (S.pickTeam) loadMembers(S.pickTeam);
+    if (msg) toast(msg);
+    render(true);
+  }
+  // NOT_FOUND なら名前を選び直してもらう。処理したら true
+  function handleCommonErr(err) {
+    if (err && err.code === 'NOT_FOUND') { resetPid('名前が見つかりませんでした。もう一度選んでね'); return true; }
+    return false;
+  }
+
+  // ============ 画面の振り分け ============
+  function currentView() {
+    if (S.sub === 'teams' || S.sub === 'names') return S.sub;
+    if (!S.pid) return S.pickTeam ? 'names' : 'teams';
+    if (S.sub) return S.sub;
+    if (!S.state) return 'loading';
+    var m = mode();
+    if (m === 'クイズ' || (m === '結果待ち' && quizPending())) return 'quiz';
+    if (m === '予想') {
+      var pm = S.state.prediction, myTeam = S.me && S.me.team;
+      if (!S.pred && pm && myTeam && (pm.team1 === myTeam || pm.team2 === myTeam)) return 'wait';
+      var r = S.pred && S.pred.reason;
+      if (r === 'PLAYING' || r === 'TEAMS_UNKNOWN' || r === 'NO_MATCH') return 'wait';
+      return 'predict';
+    }
+    if (m === '結果待ち') return 'resultwait';
+    if (m === '結果公開') return 'results';
+    return 'wait';
+  }
+  function isFormView(v) {
+    return v === 'intro' || v === 'survey' || (v === 'quiz' && S.quiz && S.quiz.phase === 'names');
+  }
+
+  var VIEWS = {};
+  var app = $('app');
+
+  function render(force) {
+    var v = currentView();
+    if (!force && v === S.lastView && isFormView(v)) { renderChrome(v); return; }
+    var html = VIEWS[v]();
+    if (force || v !== S.lastView || html !== S.lastHtml) {
+      var changed = v !== S.lastView;
+      app.innerHTML = '<div class="' + (changed ? 'fade-in' : '') + '">' + html + '</div>';
+      S.lastHtml = html;
+      if (changed) window.scrollTo(0, 0);
+      S.lastView = v;
+      afterRender(v);
+    }
+    renderChrome(v);
+  }
+  function renderChrome(v) {
+    document.querySelector('.foot').hidden = v === 'teams';
+    var b = $('banner');
+    var inSub = S.sub && S.sub !== 'teams' && S.sub !== 'names';
+    if (inSub && S.banner) {
+      b.innerHTML = '<button type="button" data-act="closeSub">' + esc(S.banner) + '</button>';
+      b.hidden = false;
+    } else {
+      b.hidden = true;
+      if (!inSub) S.banner = '';
+    }
+  }
+  function afterRender(v) {
+    if (v === 'quiz') { tickQuiz(); updateLeft(); }
+  }
+
+  // ============ ポーリング ============
+  var pollTimer = null, polling = false, failCount = 0, firstPoll = true;
+  function schedulePoll(ms) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, ms);
+  }
+  function poll() {
+    clearTimeout(pollTimer);
+    if (document.hidden || polling) return;
+    polling = true;
+    call('getState', [], function (d) {
+      polling = false;
+      failCount = 0;
+      setNet(true);
+      onState(d);
+      // 2回目は 4秒+0〜4秒(人ごとにずらす)、それ以降は4秒ごと
+      schedulePoll(firstPoll ? 4000 + rand(0, 4000) : 4000 + rand(-250, 250));
+      firstPoll = false;
+    }, function () {
+      polling = false;
+      failCount++;
+      if (failCount >= 2 || !S.state) setNet(false);
+      schedulePoll(Math.min(4000 * failCount, 15000));
+    }, 20000);
+  }
+  function setNet(ok) {
+    $('netbar').hidden = ok;
+    if (!S.state && !ok && S.pid && currentView() === 'loading') {
+      app.innerHTML = '<div class="card center"><p class="msg">うまく読み込めませんでした</p>' +
+        '<p class="muted">電波のいいところで、もう一度ためしてね</p>' +
+        '<button type="button" class="btn" data-act="retryNet">もう一度</button></div>';
+      S.lastView = 'neterr';
+    }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { clearTimeout(pollTimer); return; }
+    poll();
+    if (S.quiz) tickQuiz();
+  });
+
+  function onState(d) {
+    var prev = mode();
+    S.state = d;
+    if (typeof d.serverNow === 'number') S.offset = d.serverNow - Date.now();
+    var m = d.mode;
+    if (prev && prev !== m) {
+      var inSub = S.sub && S.sub !== 'teams' && S.sub !== 'names';
+      if (m === 'クイズ' && inSub) S.sub = null;           // クイズは全員同時なので画面を切り替える
+      else if (inSub && m === '予想') S.banner = '勝敗予想が始まったよ!予想する →';
+      else if (inSub && m === '結果公開') S.banner = '結果が発表されたよ!見る →';
+      if (m !== '予想') { S.pred = null; S.predErr = ''; }
+    }
+    if (S.pid) {
+      if (m === '予想') fetchPrediction();
+      if (m === 'クイズ' && d.quiz) ensureQuiz(d.quiz);
+      if (m === '結果待ち' && quizPending()) maybeAutoSubmit();
+    }
+    render();
+  }
+
+  // ============ チーム・名前を選ぶ ============
+  function loadMembers(team) {
+    S.members = { team: team, list: null, err: '', loading: true };
+    call('listTeamMembers', [team], function (d) {
+      if (!S.members || S.members.team !== team) return;
+      S.members = { team: team, list: d.members, err: '', loading: false };
+      render(true);
+    }, function (err) {
+      if (!S.members || S.members.team !== team) return;
+      var msg = err.code === 'QUIZ_MODE' ? 'クイズ中は名前の一覧を開けません。クイズが終わったら選んでね' : err.message;
+      S.members = { team: team, list: null, err: msg, loading: false, retry: err.code !== 'QUIZ_MODE' };
+      render(true);
+    });
+  }
+
+  VIEWS.teams = function () {
+    var h = hero('tsunaboru_normal', 'チームを<br>選んでね!');
+    h += '<div class="center"><h1 class="h1">合同運動会</h1><span class="squiggle"></span></div>';
+    TEAMS.forEach(function (t) {
+      h += '<button type="button" class="team-btn bg-' + t + '" data-act="pickTeam" data-team="' + t + '">' +
+        t + 'チーム(' + TEAM_COLOR[t] + ')<span class="arrow">›</span></button>';
+    });
+    if (S.pid) h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    return h;
+  };
+
+  VIEWS.names = function () {
+    var t = S.pickTeam, mm = S.members;
+    var h = '<div class="teamband bg-' + t + '"><div class="t">' + t + 'チーム(' + TEAM_COLOR[t] + ')</div>' +
+      '<div class="n">自分の名前をタップしてね</div></div>';
+    if (!mm || mm.team !== t || mm.loading) return h + spinner('名前を読み込み中…');
+    if (mm.err) {
+      return h + '<div class="card center"><p class="msg">' + esc(mm.err) + '</p>' +
+        (mm.retry ? '<button type="button" class="btn" data-act="reloadMembers">もう一度</button>' : '') +
+        (S.pid ? '<button type="button" class="btn sub" data-act="closeSub">もどる</button>' : '') + '</div>';
+    }
+    if (!mm.list.length) h += '<div class="card center muted">このチームにはまだ名前がありません</div>';
+    mm.list.forEach(function (p) {
+      h += '<button type="button" class="member" data-act="pickMember" data-id="' + esc(p.id) + '">' +
+        '<span class="kana">' + esc(p.kana) + '</span><span class="nm">' + esc(p.name) + '</span></button>';
+    });
+    h += '<p class="muted center small">名前がないときは、運営に声をかけてね</p>';
+    if (S.pid) h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    return h;
+  };
+
+  // ============ 自己紹介 ============
+  function openIntro() {
+    S.sub = 'intro';
+    S.intro = { loading: true };
+    render(true);
+    call('getIntro', [S.pid], function (d) {
+      var it = d.intro || {};
+      S.intro = {
+        loading: false, options: d.options, existed: !!d.intro,
+        sel: it.sport ? String(it.sport).split('・').filter(function (s) { return d.options.sports.indexOf(s) >= 0; }) : [],
+        comment: it.comment || '', nickname: it.nickname || '', sns: it.snsConsent || '', err: '', saving: false
+      };
+      if (S.sub === 'intro') render(true);
+    }, function (err) {
+      if (handleCommonErr(err)) return;
+      S.intro = { loading: false, loadErr: err.message };
+      if (S.sub === 'intro') render(true);
+    });
+  }
+
+  VIEWS.intro = function () {
+    var it = S.intro || { loading: true };
+    var h = hero('mixle_think', '自己紹介を<br>書いてね!');
+    if (it.loading) return h + spinner();
+    if (it.loadErr) {
+      return h + '<div class="card center"><p class="msg">' + esc(it.loadErr) + '</p>' +
+        '<button type="button" class="btn" data-act="openIntro">もう一度</button>' +
+        '<button type="button" class="btn sub" data-act="closeSub">もどる</button></div>';
+    }
+    var o = it.options;
+    var commentMax = o.commentMax || 20, nickMax = o.nicknameMax || 20;
+    h += '<div class="card">';
+    h += '<div class="field" style="margin-top:4px"><div class="lbl">やっていたスポーツ <small>(いくつでも)</small><span class="req">*</span></div><div class="chips">';
+    o.sports.forEach(function (s, i) {
+      h += '<button type="button" class="chip c' + (i % 5) + (it.sel.indexOf(s) >= 0 ? ' on' : '') +
+        '" data-act="introSport" data-v="' + esc(s) + '">' + esc(s) + '</button>';
+    });
+    h += '</div></div>';
+    var cl = charLen(it.comment);
+    h += '<div class="field"><div class="lbl">ひとこと <span class="req">*</span><small>(' + commentMax + '字まで)</small></div>' +
+      '<input class="input" type="text" data-in="comment" value="' + esc(it.comment) + '" placeholder="例)最近サウナにハマってる" autocomplete="off">' +
+      '<div class="help"><span>最近ハマっていること、自分の特徴など。思いつかなければ好きな食べ物でOK!</span>' +
+      '<span id="cmtCount" class="' + (cl > commentMax ? 'over' : '') + '">' + cl + '/' + commentMax + '</span></div></div>';
+    h += '<div class="field"><div class="lbl">あだ名 <small>(任意)</small></div>' +
+      '<input class="input" type="text" data-in="nickname" value="' + esc(it.nickname) + '" placeholder="例)はなちゃん、たっくん" autocomplete="off">' +
+      '<div class="help"><span>クイズの答え合わせのときだけ出るよ</span></div></div>';
+    h += '<div class="field"><div class="lbl">写真をサークルのSNS(インスタなど)に載せてもいいですか？<span class="req">*</span></div><div class="choices">';
+    o.snsConsent.forEach(function (v) {
+      h += '<button type="button" class="choice' + (it.sns === v ? ' on' : '') + '" data-act="introSns" data-v="' + esc(v) + '">' +
+        '<span class="dot"></span>' + esc(SNS_LABEL[v] || v) + '</button>';
+    });
+    h += '</div></div>';
+    h += '<div id="introErr" class="err">' + esc(it.err || '') + '</div>';
+    h += '<button type="button" class="btn" data-act="saveIntro"' + (it.saving ? ' disabled' : '') + '>' +
+      (it.saving ? '保存中…' : (it.existed ? '保存する' : '登録する')) + '</button>';
+    h += '<p class="muted small center" style="margin:4px 0 0">スポーツとひとことは、クイズのヒントになるよ。あとから何度でも直せます</p>';
+    h += '</div>';
+    h += '<button type="button" class="btn ghost" data-act="closeSub">' + (it.existed ? 'もどる' : 'あとで書く') + '</button>';
+    return h;
+  };
+
+  function saveIntro() {
+    var it = S.intro;
+    if (!it || it.saving) return;
+    var o = it.options, err = '';
+    if (!it.sel.length) err = 'やっていたスポーツを選んでね';
+    else if (!String(it.comment).trim()) err = 'ひとことを書いてね';
+    else if (charLen(it.comment.trim()) > (o.commentMax || 20)) err = 'ひとことは' + (o.commentMax || 20) + '字までです';
+    else if (charLen(it.nickname.trim()) > (o.nicknameMax || 20)) err = 'あだ名は' + (o.nicknameMax || 20) + '字までです';
+    else if (!it.sns) err = '写真のSNS掲載について選んでね';
+    if (err) { it.err = err; render(true); return; }
+    it.saving = true; it.err = '';
+    render(true);
+    call('saveIntro', [S.pid, { sports: it.sel.slice(), comment: it.comment.trim(), nickname: it.nickname.trim(), snsConsent: it.sns }], function () {
+      it.saving = false; it.existed = true;
+      if (S.me) { S.me.introDone = true; store.set('me', S.me); }
+      if (S.sub === 'intro') S.sub = null;
+      toast('保存したよ!');
+      render(true);
+    }, function (e) {
+      if (handleCommonErr(e)) return;
+      it.saving = false;
+      it.err = e.message;
+      render(true);
+    });
+  }
+
+  // ============ 待ち画面 ============
+  function myHeader() {
+    var me = S.me || {};
+    return '<div class="teamband bg-' + esc(me.team) + '"><div class="t">' + esc(me.team) + 'チーム(' + esc(TEAM_COLOR[me.team] || '') + ')</div>' +
+      '<div class="n">' + esc(me.name) + ' さん</div></div>';
+  }
+  function rankTable(rows, title) {
+    var sorted = rows.slice().sort(function (a, b) { return (a.sportsRank - b.sportsRank) || (a.team < b.team ? -1 : 1); });
+    var h = '<div class="card"><div class="center h3"><span class="spark">' + title + '</span></div>';
+    sorted.forEach(function (r) {
+      var c = r.sportsRank === 1 ? '<span class="crown"></span>' : '';
+      h += '<div class="rank-row' + (S.me && r.team === S.me.team ? ' me' : '') + '">' +
+        '<div class="r">' + c + '<b>' + esc(r.sportsRank) + '</b>位</div>' +
+        '<div class="tm"><span class="pill bg-' + r.team + '">' + r.team + 'チーム(' + TEAM_COLOR[r.team] + ')</span></div>' +
+        '<div class="pt">' + fmt(r.sportsTotal) + '<small>点</small></div></div>';
+    });
+    return h + '</div>';
+  }
+
+  VIEWS.loading = function () { return spinner(); };
+
+  VIEWS.wait = function () {
+    var st = S.state || {};
+    var cur = st.currentEvent || '', next = st.nextEvent || '';
+    var pm = st.prediction, myTeam = S.me && S.me.team;
+    var playing = mode() === '予想' && ((S.pred && S.pred.reason === 'PLAYING') ||
+      (!S.pred && pm && myTeam && (pm.team1 === myTeam || pm.team2 === myTeam)));
+    var say = playing ? '試合<br>がんばって!' : next ? '次は<br>' + esc(next) + 'だよ!' : cur ? esc(cur) + '<br>がんばろう!' : 'もうすぐ<br>始まるよ!';
+    var h = myHeader() + hero('tsunaboru_normal', say);
+    h += '<div class="event now"><span class="lbl">いま:</span><span class="name">' + esc(cur || '−') + '</span><span class="icons">' + eventIcons(cur) + '</span></div>';
+    h += '<div class="event next"><span class="lbl">つぎ:</span><span class="name">' + esc(next || '−') + '</span><span class="icons">' + eventIcons(next) + '</span></div>';
+    if (S.me && !S.me.introDone) {
+      h += '<div class="card center tint-C"><p class="h3" style="margin:0">自己紹介がまだだよ!</p>' +
+        '<p class="muted" style="margin:2px 0 0">最後のクイズのヒントになるので、書いておいてね</p>' +
+        '<button type="button" class="btn" data-act="openIntro">自己紹介を書く</button></div>';
+    }
+    if (st.sports && st.sports.length) h += rankTable(st.sports, 'チーム順位(運動の点数)');
+    h += '<p class="note"><span class="mark">※仲良しポイント(最大20点)は、最後に発表!</span></p>';
+    if (S.me && S.me.introDone) h += '<button type="button" class="btn sub" data-act="openIntro">自己紹介を見る・直す</button>';
+    return h;
+  };
+
+  // ============ 勝敗予想 ============
+  function fetchPrediction() {
+    if (S.predBusy || S.predSending) return;
+    S.predBusy = true;
+    var mid = S.state && S.state.prediction ? S.state.prediction.id : undefined;
+    call('getPrediction', mid ? [S.pid, mid] : [S.pid], function (d) {
+      S.predBusy = false;
+      if (mode() !== '予想') return;
+      S.pred = d;
+      render();
+    }, function (err) {
+      S.predBusy = false;
+      handleCommonErr(err);
+    }, 20000);
+  }
+  function submitPrediction(team) {
+    var p = S.pred, m = p && p.match;
+    if (!m || !p.canPredict || S.predSending) return;
+    S.predSending = team; S.predErr = '';
+    render(true);
+    call('submitPrediction', [S.pid, m.id, team], function (d) {
+      S.predSending = '';
+      S.pred = d;
+      toast(team + 'チームの勝ちを予想したよ!');
+      render(true);
+    }, function (err) {
+      S.predSending = '';
+      if (handleCommonErr(err)) return;
+      S.predErr = err.message;
+      render(true);
+      fetchPrediction();
+    });
+  }
+
+  VIEWS.predict = function () {
+    var p = S.pred, m = (p && p.match) || (S.state && S.state.prediction);
+    var h = hero('shatomaru_cheer', 'どっちが<br>勝つかな?');
+    if (!m) return h + spinner();
+    var round = (m.sport || '') + ' ' + (m.round || '');
+    h += '<div class="card match"><div class="round"><span class="mark mark-C">' + esc(round.trim()) + '</span></div>' +
+      '<div class="vs"><span class="mark mark-' + esc(m.team1) + '">' + esc(teamLabel(m.team1)) + '</span><i>vs</i>' +
+      '<span class="mark mark-' + esc(m.team2) + '">' + esc(teamLabel(m.team2)) + '</span></div></div>';
+    if (!p) return h + spinner('予想の受付を確認中…');
+    var r = p.reason;
+    if (r === 'NOT_OPEN') h += '<div class="card center"><p class="msg">まもなく受付!<br>ちょっと待ってね</p></div>';
+    var canPick = p.canPredict && !S.predSending;
+    [m.team1, m.team2].forEach(function (t) {
+      var chosen = p.myChoice === t || S.predSending === t;
+      var dim = (p.myChoice || S.predSending) && !chosen;
+      h += '<button type="button" class="team-btn bg-' + esc(t) + (chosen ? ' chosen' : '') + (dim ? ' dim' : '') + '" data-act="predict" data-team="' + esc(t) + '"' +
+        (canPick ? '' : ' disabled') + '>' + (chosen ? '✓ ' : '') + esc(teamLabel(t)) + 'の勝ち<span class="arrow">›</span></button>';
+    });
+    if (S.predSending) h += '<p class="muted center">送信中…</p>';
+    if (S.predErr) h += '<p class="err center">' + esc(S.predErr) + '</p>';
+    if (p.myChoice) {
+      h += '<div class="card center"><p class="msg">あなたは ' + teamPill(p.myChoice) + ' の勝ちを<br>予想しました!応援しよう!</p>' +
+        (p.canPredict ? '<p class="muted small" style="margin:6px 0 0">チームの予想が公開されるまでは変えられるよ</p>' : '') + '</div>';
+    } else if (r === 'CLOSED') {
+      h += '<div class="card center"><p class="msg">予想は締め切られました</p></div>';
+    }
+    if (p.progress) {
+      h += '<div class="card tight progress">' + PEOPLE_SVG + '<span class="lbl">チームの予想<br>入力済み</span>' +
+        '<span class="big">' + esc(p.progress.predicted) + '<small style="font-size:22px">/' + esc(p.progress.arrived) + '人</small></span></div>';
+    }
+    if (p.revealed && p.counts) {
+      h += '<div class="card"><div class="center h3"><span class="spark">チームの予想</span></div><div class="counts">';
+      p.counts.forEach(function (c) {
+        h += '<div class="tint-' + esc(c.team) + '">' + esc(c.team) + 'の勝ち<b>' + esc(c.count) + '</b>人</div>';
+      });
+      h += '</div></div>';
+    } else if (p.myChoice) {
+      h += '<p class="muted center small">チーム全員がそろうか、締め切られたら人数が見られるよ</p>';
+    }
+    return h;
+  };
+
+  // ============ クイズ ============
+  function quizStoreKey(key) { return 'quiz.' + key; }
+  function saveQuiz() {
+    var q = S.quiz;
+    if (!q) return;
+    store.set(quizStoreKey(q.key), { key: q.key, phase: q.phase === 'sending' ? 'sendErr' : q.phase, data: q.data, offset: q.offset,
+      names: q.names, origin: q.origin, originDeadline: q.originDeadline || 0, result: q.result || null, picked: q.picked || false });
+  }
+  function loadQuiz(key) {
+    var saved = store.get(quizStoreKey(key));
+    if (!saved || !saved.data) return null;
+    if (saved.phase === 'sendErr') saved.err = '前回の送信が終わっていません。もう一度送ってね';
+    return saved;
+  }
+  // クイズの途中(まだ送っていない)か
+  function quizPending() {
+    if (!S.pid) return false;
+    if (!S.quiz) {
+      var ak = store.get('aq.' + S.pid);
+      if (ak) S.quiz = loadQuiz(ak);
+    }
+    var q = S.quiz;
+    return !!(q && q.data && q.phase !== 'done' && q.phase !== 'closed');
+  }
+  function maybeAutoSubmit() {
+    var q = S.quiz;
+    if (q && (q.phase === 'names' || q.phase === 'origin')) tickQuiz();
+  }
+
+  function ensureQuiz(timing) {
+    var key = S.pid + '.' + timing.startedAt;
+    if (S.quiz && S.quiz.key === key) return;
+    store.set('aq.' + S.pid, key);
+    S.quiz = loadQuiz(key) || { key: key, phase: 'loading', names: [], origin: '' };
+    if (S.quiz.phase === 'loading') startQuiz();
+    else render(true);
+  }
+  function startQuiz(then) {
+    var q = S.quiz;
+    if (!q) return;
+    if (!then) { q.phase = 'loading'; q.err = ''; render(true); }
+    call('startQuiz', [S.pid], function (d) {
+      if (S.quiz !== q) return;
+      if (d.alreadyAnswered) {
+        quizDone(d.result);
+        return;
+      }
+      if (then) { then(); return; }
+      q.data = d;
+      q.offset = d.serverNow - Date.now();
+      S.offset = q.offset;
+      q.names = [];
+      for (var i = 0; i < d.names.count; i++) q.names.push('');
+      q.origin = '';
+      q.phase = 'names';
+      saveQuiz();
+      render(true);
+      tickQuiz();
+    }, function (err) {
+      if (S.quiz !== q) return;
+      if (handleCommonErr(err)) return;
+      if (err.code === 'NOT_QUIZ_MODE') {
+        store.del('aq.' + S.pid);
+        S.quiz = null;
+        render(true);
+        return;
+      }
+      q.phase = then ? 'sendErr' : 'loadErr';
+      q.err = err.message;
+      render(true);
+    });
+  }
+  function quizDone(result) {
+    var q = S.quiz;
+    q.phase = 'done';
+    q.result = result;
+    if (result) store.set('qres.' + S.pid, result);
+    saveQuiz();
+    render(true);
+  }
+  function goOrigin() {
+    var q = S.quiz;
+    if (!q || q.phase !== 'names') return;
+    readNameInputs();
+    var t = q.data.timing;
+    if (!q.data.origin || (t && serverNow() >= t.originEndsAt)) { submitQuiz(); return; }
+    // 出身地は15秒(originSeconds)。早く「次へ」を押した人も15秒だけ。全員の締め切り originEndsAt は超えない
+    q.originDeadline = Math.min(t.originEndsAt, serverNow() + (t.originSeconds || 15) * 1000);
+    q.phase = 'origin';
+    saveQuiz();
+    render(true);
+  }
+  function submitQuiz() {
+    var q = S.quiz;
+    if (!q || q.phase === 'sending' || q.phase === 'done') return;
+    q.phase = 'sending';
+    q.err = '';
+    saveQuiz();
+    render(true);
+    var answers = {
+      names: q.names.map(function (s) { return String(s || '').trim(); }).filter(function (s) { return s; }),
+      origin: q.origin || ''
+    };
+    call('submitQuiz', [S.pid, answers], function (d) {
+      if (S.quiz !== q) return;
+      quizDone(d);
+    }, function (err) {
+      if (S.quiz !== q || q.phase === 'done') return;
+      if (handleCommonErr(err)) return;
+      if (err.code === 'QUIZ_CLOSED') { q.phase = 'closed'; saveQuiz(); render(true); return; }
+      q.phase = 'sendErr';
+      q.needRestart = err.code === 'NO_QUIZ';
+      q.err = err.code === 'BUSY' ? '混み合っています。少し待ってからもう一度送ってね' : err.message;
+      saveQuiz();
+      render(true);
+    }, 30000);
+  }
+  function retrySubmit() {
+    var q = S.quiz;
+    if (!q) return;
+    if (q.needRestart) {
+      q.needRestart = false;
+      q.phase = 'sending';
+      render(true);
+      startQuiz(function () { q.phase = 'sendErr'; submitQuiz(); });
+      return;
+    }
+    submitQuiz();
+  }
+  function originDeadline(q) { return q.originDeadline || q.data.timing.originEndsAt; }
+  function readNameInputs() {
+    var q = S.quiz;
+    var els = app.querySelectorAll('[data-in="qname"]');
+    for (var i = 0; i < els.length; i++) q.names[+els[i].getAttribute('data-i')] = els[i].value;
+  }
+  function mmss(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    var m = Math.floor(s / 60), r = s % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+  }
+  // 残り時間の表示と、締め切りでの自動の切り替え
+  function tickQuiz() {
+    var q = S.quiz;
+    if (!q || !q.data || !q.data.timing) return;
+    var t = q.data.timing, now = serverNow();
+    if (q.phase === 'names') {
+      if (now >= t.nameEndsAt) { goOrigin(); return; }
+      setTimer(t.nameEndsAt - now);
+    } else if (q.phase === 'origin') {
+      var od = originDeadline(q);
+      if (now >= od) { submitQuiz(); return; }
+      setTimer(od - now);
+    }
+  }
+  function setTimer(ms) {
+    var el = $('qtime');
+    if (!el) return;
+    el.textContent = mmss(ms);
+    $('qtimer').className = 'timer' + (ms <= 10000 ? ' hurry' : '');
+  }
+  function updateLeft() {
+    var q = S.quiz;
+    var el = $('qleft');
+    if (!q || !el || !q.names) return;
+    var filled = q.names.filter(function (s) { return String(s || '').trim(); }).length;
+    el.innerHTML = filled >= q.names.length ? '全員書けた!' : 'あと<b>' + (q.names.length - filled) + '</b>人';
+  }
+  setInterval(function () { if (S.quiz && (S.quiz.phase === 'names' || S.quiz.phase === 'origin')) tickQuiz(); }, 250);
+
+  function timerHtml(ms) {
+    return '<div id="qtimer" class="timer"><span class="clock"></span><span id="qtime" class="t">' + mmss(ms) + '</span></div>';
+  }
+
+  VIEWS.quiz = function () {
+    var q = S.quiz;
+    if (!q || q.phase === 'loading') return hero('mixle_think', '名前、<br>覚えてる?') + spinner('問題を受け取っています…');
+    if (q.phase === 'done') return reviewHtml(q.result, false);
+    if (q.phase === 'loadErr') {
+      return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">問題を受け取れませんでした</p>' +
+        '<p class="muted">' + esc(q.err) + '</p><button type="button" class="btn" data-act="quizRetryStart">もう一度</button></div>';
+    }
+    if (q.phase === 'sending') return hero('mixle_think', 'おつかれさま!') + spinner('送信中…');
+    if (q.phase === 'sendErr') {
+      return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">答えを送れませんでした</p>' +
+        '<p class="muted">' + esc(q.err || NET_MSG) + '</p><p class="small">答えはこのスマホに残っているので大丈夫!</p>' +
+        '<button type="button" class="btn" data-act="quizResend">もう一度送る</button></div>';
+    }
+    if (q.phase === 'closed') {
+      return hero('mixle_think', 'ざんねん…') + '<div class="card center"><p class="msg">クイズの受付は終わりました</p></div>';
+    }
+    var d = q.data, t = d.timing || {}, now = serverNow();
+    if (q.phase === 'origin') {
+      var o = d.origin;
+      var h = hero('mixle_think', 'どこ出身<br>だっけ?', true);
+      h += '<div class="card center"><div class="h2">出身地クイズ</div>' + timerHtml(originDeadline(q) - now) +
+        '<p class="h2" style="margin-top:14px"><span class="mark">' + esc(o.targetName) + '</span> さんの<br>出身地は？</p>';
+      h += '<div class="pref-grid">';
+      o.choices.forEach(function (c) {
+        h += '<button type="button" class="btn' + (q.origin === c ? ' on' : '') + '" data-act="quizOrigin" data-v="' + esc(c) + '">' + esc(c) + '</button>';
+      });
+      return h + '</div></div>';
+    }
+    // 名前の問題
+    var n = d.names.count;
+    var h2 = hero('mixle_think', '名前、<br>覚えてる?', true);
+    h2 += '<div class="card center"><div class="h2">チームのメンバー<span class="mark">' + n + '人</span>の<br>名前を書こう</div>' +
+      timerHtml(t.nameEndsAt - now) + '<p class="muted small" style="margin:8px 0 0">漢字でもひらがなでもOK!フルネームで書いてね</p></div>';
+    h2 += '<div class="card">';
+    if (n === 0) {
+      h2 += '<p class="center">書く人はいないよ。そのまま次へ進んでね</p>';
+    } else {
+      h2 += '<p id="qleft" class="left"></p>';
+      h2 += '<p class="muted small center" style="margin:0 0 4px">右はヒント(スポーツ/ひとこと)。順番は欄とバラバラだよ</p>';
+      for (var i = 0; i < n; i++) {
+        var hint = d.names.hints[i];
+        var v = q.names[i] || '';
+        h2 += '<div class="qrow"><span class="no">' + (i + 1) + '</span>' +
+          '<input class="input' + (v.trim() ? ' filled' : '') + '" type="text" data-in="qname" data-i="' + i + '" value="' + esc(v) +
+          '" placeholder="名前を入力" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">' +
+          (hint ? '<div class="hint h' + (i % 4) + '"><span class="sp">' + esc(hint.sport) + '</span>' + esc(hint.comment) + '</div>'
+                : '<div class="hint none">ヒントなし</div>') + '</div>';
+      }
+    }
+    h2 += '<button type="button" class="btn" data-act="quizNext">' + (d.origin ? '次へ(出身地の問題)' : '送信する') + '</button>';
+    h2 += '<p class="muted small center" style="margin:0">時間になったら自動で次へ進みます</p></div>';
+    return h2;
+  };
+
+  // ============ 答え合わせ ============
+  function openReview() {
+    S.sub = 'review';
+    S.review = { loading: !myResult(), err: '' };
+    render(true);
+    call('getQuizResult', [S.pid], function (d) {
+      if (d.answered && d.result) store.set('qres.' + S.pid, d.result);
+      S.review = { loading: false, err: d.answered ? '' : 'まだクイズに答えていないみたい' };
+      if (S.sub === 'review') render(true);
+    }, function (err) {
+      if (handleCommonErr(err)) return;
+      S.review = { loading: false, err: myResult() ? '' : err.message };
+      if (S.sub === 'review') render(true);
+    });
+  }
+  VIEWS.review = function () {
+    var r = S.review || {};
+    if (r.loading) return hero('mixle_think', '答え合わせ') + spinner();
+    if (r.err) {
+      return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">' + esc(r.err) + '</p>' +
+        '<button type="button" class="btn" data-act="openReview">もう一度</button>' +
+        '<button type="button" class="btn sub" data-act="closeSub">もどる</button></div>';
+    }
+    return reviewHtml(myResult(), true);
+  };
+
+  function reviewHtml(res, withBack) {
+    if (!res) return hero('mixle_think', 'おつかれさま!') + '<div class="card center"><p class="msg">答えを送りました!</p></div>' + afterQuizButtons(withBack);
+    var h = hero('mixle_think', res.correctCount >= res.total && res.total > 0 ? 'すごい!<br>全員だね!' : 'おつかれさま!', true);
+    if (res.total > 0) {
+      h += '<div class="card score-head"><div class="of">' + esc(res.total) + '人中</div>' +
+        '<div class="got"><b>' + esc(res.correctCount) + '</b>人書けた!</div>' +
+        (res.pendingCount ? '<p class="muted small" style="margin:6px 0 0">※' + esc(res.pendingCount) + '人は「惜しい」答えで、運営が確認中</p>' : '') + '</div>';
+    }
+    if (!(res.total > 0)) h += '<div class="card center"><p class="msg">答えを送りました!</p></div>';
+    var missed = (res.members || []).filter(function (m) { return !m.written; });
+    if (missed.length) {
+      h += '<div class="card"><div class="center"><span class="h2 mark">覚えよう!</span></div>' +
+        '<p class="center h3">書けなかった' + missed.length + '人はこの人!</p>';
+      missed.forEach(function (m) {
+        h += '<div class="learn"><span class="face"></span><div class="who"><div class="kana">' + esc(m.kana) + '</div>' +
+          '<div class="nm">' + esc(m.name) + '</div>' + (m.nickname ? '<div class="nick">あだ名:' + esc(m.nickname) + '</div>' : '') + '</div>' +
+          (m.pending ? '<span class="tag">確認中</span>' : '') + '</div>';
+      });
+      h += '<p class="muted small center" style="margin:6px 0 0">今日のうちに話しかけてみよう!</p></div>';
+    } else if (res.total > 0) {
+      h += '<div class="card center"><p class="msg">チーム全員の名前が書けたね!</p></div>';
+    }
+    if (res.origin) {
+      var o = res.origin;
+      h += '<div class="card center"><div class="h3">出身地クイズ</div>' +
+        '<p style="margin:4px 0">' + esc(o.targetName) + ' さんの出身地は<br><span class="big" style="font-size:30px">' + esc(o.answer) + '</span></p>' +
+        (o.correct ? '<p class="okmark msg">正解!</p>'
+          : '<p class="ngmark">' + (o.yourAnswer ? 'あなたの答え:' + esc(o.yourAnswer) : '時間切れ') + '</p>') + '</div>';
+    }
+    return h + afterQuizButtons(withBack);
+  }
+  function afterQuizButtons(withBack) {
+    var h = '';
+    if (!surveyDone()) h += '<button type="button" class="btn" data-act="openSurvey">アンケートに進む</button>';
+    else h += '<p class="muted center">アンケートは回答済み。ありがとう!</p>';
+    if (withBack) h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    return h;
+  }
+
+  // ============ アンケート ============
+  VIEWS.survey = function () {
+    var s = S.survey;
+    var h = hero('tsunaboru_joy', 'おつかれさま!<br>アンケートだよ', true);
+    function scale(key, lo, hi) {
+      var x = '<div class="scale">';
+      for (var i = 1; i <= 5; i++) x += '<button type="button" class="' + (s[key] === i ? 'on' : '') + '" data-act="survey" data-k="' + key + '" data-v="' + i + '">' + i + '</button>';
+      return x + '</div><div class="scale-lbl"><span>' + lo + '</span><span>' + hi + '</span></div>';
+    }
+    h += '<div class="card">';
+    h += '<div class="field" style="margin-top:4px"><div class="lbl">1. 今日は楽しかったですか？</div>' + scale('fun', 'ぜんぜん', 'とても') + '</div>';
+    h += '<div class="field"><div class="lbl">2. 普段あまり話さない人と話せましたか？</div>' + scale('talked', 'ぜんぜん', 'たくさん') + '</div>';
+    h += '<div class="field"><div class="lbl">3. またこういうイベントがあったら参加したいですか？</div><div class="yn">' +
+      ['はい', 'いいえ'].map(function (v) {
+        return '<button type="button" class="' + (s.again === v ? 'on' : '') + '" data-act="survey" data-k="again" data-v="' + v + '">' + v + '</button>';
+      }).join('') + '</div></div>';
+    h += '<div class="field"><div class="lbl">4. 感想・次にやってほしいこと <small>(任意)</small></div>' +
+      '<textarea class="textarea" data-in="surveyComment" maxlength="1000" placeholder="なんでもどうぞ!">' + esc(s.comment) + '</textarea></div>';
+    h += '<div id="surveyErr" class="err">' + esc(s.err) + '</div>';
+    h += '<button type="button" class="btn" data-act="sendSurvey"' + (s.sending ? ' disabled' : '') + '>' + (s.sending ? '送信中…' : '送信する') + '</button>';
+    h += '<p class="muted small center" style="margin:0">名前は記録しません(匿名)</p></div>';
+    h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    return h;
+  };
+  function sendSurvey() {
+    var s = S.survey;
+    if (s.sending) return;
+    if (!s.fun || !s.talked || !s.again) { s.err = '1〜3に答えてね'; render(true); return; }
+    s.sending = true; s.err = '';
+    render(true);
+    call('submitSurvey', [{ fun: s.fun, talked: s.talked, again: s.again, comment: s.comment.trim() }], function () {
+      s.sending = false;
+      store.set('surveyDone', true);
+      S.sub = 'thanks';
+      render(true);
+    }, function (err) {
+      s.sending = false;
+      s.err = err.message;
+      render(true);
+    });
+  }
+  VIEWS.thanks = function () {
+    return hero('tsunaboru_joy', 'ありがとう!') +
+      '<div class="card center"><p class="msg">アンケートを送りました!</p><p class="muted">今日は来てくれてありがとう。またね!</p></div>' +
+      '<button type="button" class="btn sub" data-act="closeSub">もどる</button>';
+  };
+
+  // ============ 結果 ============
+  function resultLinks() {
+    var h = '';
+    if (myResult()) h += '<button type="button" class="btn sub" data-act="openReview">クイズの答え合わせを見る</button>';
+    if (!surveyDone()) h += '<button type="button" class="btn" data-act="openSurvey">アンケートに答える</button>';
+    return h;
+  }
+  VIEWS.resultwait = function () {
+    var h = myHeader() + hero('tsunaboru_excited', 'ドキドキ…!');
+    h += '<div class="card center"><p class="h1" style="font-size:22px">結果発表を待ってね!</p><span class="squiggle"></span>' +
+      '<p class="muted" style="margin:10px 0 0">発表が終わったら、ここにも結果が出るよ</p></div>';
+    return h + resultLinks();
+  };
+  VIEWS.results = function () {
+    var res = (S.state && S.state.results) || { teams: [] };
+    var rows = res.teams.slice().sort(function (a, b) { return (a.totalRank - b.totalRank) || (a.team < b.team ? -1 : 1); });
+    var h = '<div class="hero">' + img('tsunaboru_joy', '', '') + '<span class="ribbon">結果発表!</span></div>';
+    rows.forEach(function (t) {
+      var crown = t.totalRank <= 3 ? '<span class="crown' + (t.totalRank === 1 ? '' : ' c' + t.totalRank) + '"></span>' : '';
+      h += '<div class="res' + (t.totalRank === 1 ? ' first' : '') + (S.me && t.team === S.me.team ? ' me' : '') + '">' +
+        '<div class="top"><span class="rk">' + crown + esc(t.totalRank) + '<small>位</small></span>' + teamPill(t.team) +
+        '<span class="tot">' + fmt(t.total) + '<small>点</small></span></div>' +
+        '<div class="bd"><span>運動 ' + fmt(t.sportsTotal) + '点</span><span>仲良し ' + fmt(t.nakayoshiTotal) + '点</span></div>' +
+        '<div class="bd2">仲良しの内訳:クイズ ' + fmt(t.quiz) + '・お題カード ' + fmt(t.odai) + '・勝敗予想 ' + fmt(t.prediction) + '</div></div>';
+    });
+    h += img('celebration', 'celebrate', 'お祝い');
+    h += '<p class="note">みんな、おつかれさま!</p>';
+    return h + resultLinks();
+  };
+
+  // ============ 操作 ============
+  var ACTIONS = {
+    retryNet: function () { failCount = 0; poll(); if (S.pid && !S.state) app.innerHTML = spinner(); S.lastView = ''; },
+    changeTeam: function () { S.sub = 'teams'; render(true); },
+    closeSub: function () { S.sub = null; S.banner = ''; render(true); },
+    pickTeam: function (el) {
+      var t = el.getAttribute('data-team');
+      S.pickTeam = t;
+      S.sub = S.pid ? 'names' : null;
+      loadMembers(t);
+      render(true);
+    },
+    reloadMembers: function () { loadMembers(S.pickTeam); render(true); },
+    pickMember: function (el) {
+      var id = el.getAttribute('data-id');
+      if (S.selecting) return;
+      S.selecting = true;
+      el.disabled = true;
+      el.querySelector('.nm').textContent += ' …';
+      call('selectSelf', [id], function (d) {
+        S.selecting = false;
+        if (d.id !== S.pid) { S.quiz = null; S.pred = null; S.intro = null; }
+        setMe(d);
+        S.sub = null;
+        toast('ようこそ、' + d.name + ' さん!');
+        if (!d.introDone) openIntro(); else render(true);
+        poll();
+      }, function (err) {
+        S.selecting = false;
+        S.members.err = err.message;
+        S.members.retry = true;
+        render(true);
+      });
+    },
+    openIntro: function () { openIntro(); },
+    introSport: function (el) {
+      var it = S.intro, v = el.getAttribute('data-v');
+      if (v === '特になし') it.sel = it.sel.indexOf(v) >= 0 ? [] : [v];
+      else {
+        it.sel = it.sel.filter(function (s) { return s !== '特になし'; });
+        var i = it.sel.indexOf(v);
+        if (i >= 0) it.sel.splice(i, 1); else it.sel.push(v);
+      }
+      it.sel = it.options.sports.filter(function (s) { return it.sel.indexOf(s) >= 0; });
+      render(true);
+    },
+    introSns: function (el) { S.intro.sns = el.getAttribute('data-v'); render(true); },
+    saveIntro: saveIntro,
+    predict: function (el) { submitPrediction(el.getAttribute('data-team')); },
+    quizRetryStart: function () { startQuiz(); },
+    quizNext: function () { goOrigin(); },
+    quizOrigin: function (el) {
+      var q = S.quiz;
+      if (!q || q.phase !== 'origin') return;
+      q.origin = el.getAttribute('data-v');
+      saveQuiz();
+      submitQuiz();
+    },
+    quizResend: function () { retrySubmit(); },
+    openReview: function () { openReview(); },
+    openSurvey: function () { S.sub = 'survey'; S.survey.err = ''; render(true); },
+    survey: function (el) {
+      var k = el.getAttribute('data-k'), v = el.getAttribute('data-v');
+      S.survey[k] = k === 'again' ? v : +v;
+      render(true);
+    },
+    sendSurvey: sendSurvey
+  };
+  var INPUTS = {
+    comment: function (el) {
+      S.intro.comment = el.value;
+      var c = $('cmtCount'), n = charLen(el.value), max = S.intro.options.commentMax || 20;
+      if (c) { c.textContent = n + '/' + max; c.className = n > max ? 'over' : ''; }
+    },
+    nickname: function (el) { S.intro.nickname = el.value; },
+    surveyComment: function (el) { S.survey.comment = el.value; },
+    qname: function (el) {
+      var q = S.quiz;
+      if (!q || q.phase !== 'names') return;
+      q.names[+el.getAttribute('data-i')] = el.value;
+      el.className = 'input' + (el.value.trim() ? ' filled' : '');
+      saveQuiz();
+      updateLeft();
+    }
+  };
+
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-act]') : null;
+    if (!el || el.disabled) return;
+    var f = ACTIONS[el.getAttribute('data-act')];
+    if (f) { e.preventDefault(); f(el); }
+  });
+  document.addEventListener('input', function (e) {
+    var el = e.target, f = el.getAttribute && INPUTS[el.getAttribute('data-in')];
+    if (f) f(el);
+  });
+  // クイズの名前欄:Enter で次の欄へ
+  document.addEventListener('keydown', function (e) {
+    var el = e.target;
+    if (e.key !== 'Enter' || !el.getAttribute) return;
+    if (el.getAttribute('data-in') === 'qname') {
+      e.preventDefault();
+      var next = app.querySelector('[data-in="qname"][data-i="' + (+el.getAttribute('data-i') + 1) + '"]');
+      if (next) next.focus(); else el.blur();
+    } else if (el.tagName === 'INPUT') {
+      e.preventDefault();
+      el.blur();
+    }
+  });
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 2600);
+  }
+
+  // ============ はじめ ============
+  (function bunting() {
+    var b = document.querySelector('.bunting'), n = Math.max(12, Math.ceil(Math.min(window.innerWidth, 900) / 26)), h = '';
+    for (var i = 0; i < n; i++) h += '<span></span>';
+    b.innerHTML = h;
+  })();
+
+  if (S.pid) {
+    // 覚えている自分で本人確認(チームが変わっていることがある)。失敗しても、覚えている内容でそのまま進む
+    call('selectSelf', [S.pid], function (d) {
+      setMe(d);
+      render();
+    }, function (err) { handleCommonErr(err); });
+  } else if (TEAM) {
+    S.pickTeam = TEAM;
+    loadMembers(TEAM);
+  }
+  render(true);
+  poll();
+})();
+</script>
