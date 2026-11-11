@@ -143,3 +143,18 @@ test('アンケートは自分専用の行に書き、名前を選んでいな�
  assert.equal(sh.data[3][h.indexOf('また参加したいか')],'いいえ');
  assert.equal(sh.getLastRow(),5);
 });
+test('resetEventData:当日のデータとキャッシュの目印を消し、参加者とチーム分けは残す',()=>{
+ const e=world(),g=e.ctx;
+ g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
+ g.selectSelf('P01');g.saveIntro('P01',{sports:['バスケ'],comment:'よろしく',snsConsent:'載せない'});
+ g.adminStartQuiz(e.token);g.startQuiz('P01');g.submitQuiz('P01',{names:[],origin:''});
+ g.submitSurvey({fun:5,talked:5,again:'はい'},'P01');
+ g.resetEventData();
+ for(const n of ['予想','予想公開','クイズ問題','クイズ回答','惜しい答え','お題カード','アンケート'])assert.equal(e.app.getSheetByName(n).getLastRow(),1,n);
+ assert.equal(e.roster.getSheetByName('自己紹介').getLastRow(),1);
+ assert.equal(g.readState_(true).mode,'待ち');
+ assert.equal(match(Object.assign(e,{token:g.adminLogin('pw').data.token}),'V-SF1').predictionStatus,'受付前');
+ const ps=g.readParticipants_(true);assert.equal(ps.length,3);assert.ok(ps.every(p=>p.arrivedAt===null&&p.team==='C'));
+ // 来場済みの目印も消えているので、もう一度選ぶと来場時刻が入る
+ g.selectSelf('P01');assert.notEqual(g.readParticipants_(true)[0].arrivedAt,null);
+});

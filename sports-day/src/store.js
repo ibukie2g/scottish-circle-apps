@@ -65,8 +65,30 @@ function withLock_(fn) {
 
 // ---- キャッシュ ----
 
+/**
+ * キャッシュ。キーの頭に「世代番号」(スクリプト プロパティ CACHE_EPOCH)を付ける。
+ * resetEventData() で世代を進めると、来場済み・公開済み・送信済みなどの目印が全部まとめて無効になる
+ */
 function cache_() {
-  return CacheService.getScriptCache();
+  var c = CacheService.getScriptCache();
+  var p = cacheEpoch_() + '|';
+  return {
+    get: function (k) { return c.get(p + k); },
+    put: function (k, v, sec) { return c.put(p + k, v, sec); },
+    remove: function (k) { return c.remove(p + k); },
+    removeAll: function (ks) { return c.removeAll(ks.map(function (k) { return p + k; })); },
+    getAll: function (ks) {
+      var got = c.getAll(ks.map(function (k) { return p + k; })), out = {};
+      Object.keys(got).forEach(function (k) { out[k.slice(p.length)] = got[k]; });
+      return out;
+    }
+  };
+}
+
+var cacheEpochMemo_ = null;
+function cacheEpoch_() {
+  if (cacheEpochMemo_ === null) cacheEpochMemo_ = PropertiesService.getScriptProperties().getProperty('CACHE_EPOCH') || '0';
+  return cacheEpochMemo_;
 }
 
 function cacheGetJson_(key) {

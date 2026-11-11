@@ -102,7 +102,7 @@ function loadGas({ props = {}, user = 'owner@example.com' } = {}) {
     },
     CacheService: { getScriptCache: () => cache },
     LockService: { getScriptLock: () => lock },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null) }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
     Session: {
       getActiveUser: () => ({ getEmail: () => ctx.__activeUser }),
       getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' })

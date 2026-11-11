@@ -112,13 +112,7 @@ function setup() {
 
     // 試合:データが無いときだけ18試合を入れる
     if (readTable_(SH_MATCHES, true).rows.length === 0) {
-      appendRows_(SH_MATCHES, INITIAL_MATCHES.map(function (m) {
-        return {
-          '試合ID': m.id, '種目': m.sport, '回': m.round, 'チーム1': m.team1, 'チーム2': m.team2,
-          '点数1': '', '点数2': '', '状態': MATCH_PLANNED,
-          '予想の状態': m.sport === SPORT_VOLLEY ? '受付前' : 'なし', '関連試合': m.related
-        };
-      }));
+      appendRows_(SH_MATCHES, initialMatchRows_());
       log.push('試合を18試合入れました');
     }
 
@@ -149,6 +143,68 @@ function setup() {
     invalidateRoster_();
   });
   log.push('setup 完了');
+  console.log(log.join('\n'));
+  return log;
+}
+
+/** 18試合の最初の行 */
+function initialMatchRows_() {
+  return INITIAL_MATCHES.map(function (m) {
+    return {
+      '試合ID': m.id, '種目': m.sport, '回': m.round, 'チーム1': m.team1, 'チーム2': m.team2,
+      '点数1': '', '点数2': '', '状態': MATCH_PLANNED,
+      '予想の状態': m.sport === SPORT_VOLLEY ? '受付前' : 'なし', '関連試合': m.related
+    };
+  });
+}
+
+/** シートの見出し以外を空にする */
+function clearBody_(sh) {
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, Math.max(1, sh.getLastColumn())).clearContent();
+}
+
+/**
+ * 当日のデータを消して、始まる前の状態に戻す(テストのあと・本番の前に使う)。Apps Script のエディタから実行する。
+ *
+ * 消すもの:予想・予想公開・クイズ問題・クイズ回答・惜しい答え・お題カード・アンケート、
+ *          参加者の来場時刻、名簿ファイルの「自己紹介」、キャッシュの目印(来場済み・公開済み・送信済みなど)
+ * 最初に戻すもの:試合(18試合・点数なし)、状態(モード=待ち)、集計
+ * 残すもの:参加者とチーム分け、設定、名簿ファイルのフォームの回答と「当日追加」
+ */
+function resetEventData() {
+  requireEditor_();
+  var log = [];
+  withLock_(function () {
+    [SH_PREDICTIONS, '予想公開', SH_QUIZ_Q, SH_QUIZ_A, SH_NEAR, SH_ODAI, SH_SURVEY].forEach(function (name) {
+      clearBody_(sheet_(name));
+    });
+    log.push('予想・クイズ・惜しい答え・お題カード・アンケートを消しました');
+
+    clearBody_(sheet_(SH_MATCHES));
+    appendRows_(SH_MATCHES, initialMatchRows_());
+    clearBody_(sheet_(SH_STATE));
+    appendRows_(SH_STATE, INITIAL_STATE.map(function (r) { return { 'キー': r[0], '値': r[1] }; }));
+    log.push('試合と状態を最初に戻しました(モード=待ち)');
+
+    var parts = readTable_(SH_PARTICIPANTS, true);
+    var col = headerIndex_(parts.headers, '来場時刻') + 1;
+    var psh = sheet_(SH_PARTICIPANTS);
+    if (psh.getLastRow() > 1) psh.getRange(2, col, psh.getLastRow() - 1, 1).clearContent();
+    log.push('来場時刻を消しました(参加者 ' + parts.rows.length + '人とチーム分けは残しています)');
+
+    clearBody_(rosterSheet_(rosterSs_(), ROSTER_INTRO_SHEET));
+    log.push('名簿ファイルの「自己紹介」を消しました');
+
+    invalidate_(appSheets_().map(function (d) { return d[0]; }));
+    invalidateRoster_();
+    refreshSummary_();
+  });
+  // キャッシュの世代を進めて、目印をまとめて無効にする
+  PropertiesService.getScriptProperties().setProperty('CACHE_EPOCH', String(Date.now()));
+  cacheEpochMemo_ = null;
+  log.push('キャッシュの目印を無効にしました');
+  log.push('リセット完了');
   console.log(log.join('\n'));
   return log;
 }
