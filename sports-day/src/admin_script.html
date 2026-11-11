@@ -1,0 +1,1271 @@
+<script>
+/*
+ * 運営画面のスクリプト(サーバーとのやりとりは docs/API.md の関数だけ)
+ * - 下のタブ5つ:進行 / 試合 / 順位 / クイズ / 名簿
+ * - トークンは sessionStorage に置く。AUTH が返ったらログイン画面に戻す
+ * - 保存中は「保存中…」、成功で「保存しました」、失敗は理由(通信の失敗は「もう一度送る」)
+ */
+(function () {
+  'use strict';
+
+  var TEAMS = ['A', 'B', 'C', 'D'];
+  var TEAM_MARK = { A: '🔴', B: '🔵', C: '🟡', D: '🟢' };
+  var SPORTS = [
+    { key: 'バスケ', icon: '🏀' },
+    { key: 'バド', icon: '🏸' },
+    { key: 'ドッジ', icon: '🤾' },
+    { key: 'バレー', icon: '🏐' }
+  ];
+  // 「今の種目・次の種目」の候補(当日の流れの順)
+  var EVENTS = ['バスケ', 'バド+ドッジ', 'バレー', 'クイズ', '結果発表'];
+  var MODE_TEXT = {
+    '待ち': '待ち画面(種目と運動の点数)',
+    '予想': 'バレーの勝敗予想',
+    'クイズ': 'クイズ中',
+    '結果待ち': 'クイズ終了・結果発表を待つ',
+    '結果公開': '結果を全員に公開中'
+  };
+  var TAB_TITLE = { progress: '進行', matches: '試合', scores: '順位', quiz: 'クイズ', roster: '名簿' };
+  var PREFS = ['北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県', '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県',
+    '東京都', '神奈川県', '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県', '静岡県', '愛知県', '三重県',
+    '滋賀県', '京都府', '大阪府', '兵庫県', '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県', '徳島県',
+    '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県', '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'];
+  var TOKEN_KEY = 'sportsDayAdminToken';
+
+  // 画面の状態
+  var S = {
+    token: '',
+    ov: null,            // adminGetOverview の data
+    offset: 0,           // サーバー時刻 - 端末の時刻
+    tab: 'progress',
+    sport: null,         // 試合タブで開いている種目
+    drafts: {},          // 試合ID → { s1, s2 }(入力中の点数)
+    pred: {},            // 試合ID → adminGetPredictionSummary の data
+    ev: null,            // 種目の入力中 { cur, next }
+    scores: null,        // adminGetScores の data
+    scoreView: 'sports', // 'sports'(運動だけ) | 'total'(仲良し込み)
+    scoreOrder: 'up',    // 'up' = 4位から | 'down' = 1位から
+    quizStatus: null,
+    near: null,
+    showJudged: false,
+    odai: null,
+    odaiNo: 1,
+    odaiDraft: {},       // お題番号 → { theme, teams: { A: { matched, answered } } }
+    rosterFilter: 'all',
+    rosterQuery: '',
+    openPerson: null,
+    walkTeam: '',
+    lastImport: null,
+    settingsDraft: {},
+    openDetails: {}      // <details> の data-key → 開いているか
+  };
+
+  // ============ 小さな道具 ============
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function ssGet(k) { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function ssSet(k, v) { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) { /* 使えない端末は覚えない */ } }
+  function now() { return Date.now() + S.offset; }
+  function fmt1(n) {
+    if (n === null || n === undefined || n === '') return '-';
+    var x = Math.round(Number(n) * 10) / 10;
+    return String(x);
+  }
+  function pct(n) { return n === null || n === undefined ? '-' : fmt1(n) + '%'; }
+  function teamChip(t, lg) {
+    if (!t) return '<span class="team none' + (lg ? ' lg' : '') + '">?</span>';
+    return '<span class="team ' + esc(t) + (lg ? ' lg' : '') + '">' + esc(t) + '</span>';
+  }
+  function clock(ms) {
+    if (ms === null || ms === undefined) return '-';
+    var d = new Date(ms);
+    return d.getHours() + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+  function mmss(sec) {
+    sec = Math.max(0, Math.ceil(sec));
+    return Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2);
+  }
+  function setting(key, def) {
+    var rows = (S.ov && S.ov.settings) || [];
+    for (var i = 0; i < rows.length; i++) if (rows[i].key === key) {
+      var n = Number(rows[i].value);
+      return isNaN(n) ? def : n;
+    }
+    return def;
+  }
+  function matchById(id) {
+    var ms = (S.ov && S.ov.matches) || [];
+    for (var i = 0; i < ms.length; i++) if (ms[i].id === id) return ms[i];
+    return null;
+  }
+  function personById(id) {
+    var ps = (S.ov && S.ov.participants) || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === id) return ps[i];
+    return null;
+  }
+  function matchLabel(m) { return m ? m.sport + ' ' + m.round : ''; }
+  /** 開いた <details> を書き直しのあとも開いたままにする */
+  function det(key, style) {
+    return '<details data-key="' + esc(key) + '"' + (style ? ' style="' + style + '"' : '') + (S.openDetails[key] ? ' open' : '') + '>';
+  }
+  function inputFocused() {
+    var a = document.activeElement;
+    return !!(a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA') && a.closest('main'));
+  }
+
+  // ============ 保存中などの表示 ============
+  var statusTimer = null;
+  function showStatus(kind, msg, retry) {
+    var el = $('status');
+    clearTimeout(statusTimer);
+    el.className = 'status ' + kind;
+    el.innerHTML = '<span class="msg">' + esc(msg) + '</span>' +
+      (retry ? '<button type="button" data-st="retry">もう一度送る</button>' : '') +
+      (kind === 'err' ? '<button type="button" data-st="close" aria-label="閉じる">✕</button>' : '');
+    el.onclick = function (e) {
+      var b = e.target.closest('[data-st]');
+      if (!b) return;
+      hideStatus();
+      if (b.getAttribute('data-st') === 'retry' && retry) retry();
+    };
+    if (kind === 'ok') statusTimer = setTimeout(hideStatus, 1800);
+    if (kind === 'err' && !retry) statusTimer = setTimeout(hideStatus, 6000);
+  }
+  function hideStatus() { $('status').className = 'status hidden'; }
+
+  // ============ 確認(1回だけ) ============
+  function confirmBox(title, body, okLabel, onOk, danger) {
+    var m = $('modal');
+    m.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' +
+      '<h3>' + esc(title) + '</h3><div class="body">' + esc(body) + '</div>' +
+      '<div class="row"><button class="btn ghost grow" data-m="cancel">やめる</button>' +
+      '<button class="btn grow ' + (danger ? 'ng' : 'accent') + '" data-m="ok">' + esc(okLabel) + '</button></div></div>';
+    m.className = 'modal-bg';
+    m.onclick = function (e) {
+      var b = e.target.closest('[data-m]');
+      if (!b && e.target !== m) return;
+      m.className = 'modal-bg hidden';
+      m.innerHTML = '';
+      if (b && b.getAttribute('data-m') === 'ok') onOk();
+    };
+  }
+
+  // ============ サーバー呼び出し ============
+  /**
+   * 運営用の関数を呼ぶ(第1引数にトークンを足す)
+   * opt: { save: '保存中…の文言' | true, ok: '成功の文言', onOk(data), onErr(err), btn: 押したボタン }
+   */
+  function api(fn, args, opt) {
+    callRaw(fn, [S.token].concat(args || []), opt || {});
+  }
+  function callRaw(fn, args, opt) {
+    var saving = !!opt.save;
+    if (saving) showStatus('saving', typeof opt.save === 'string' ? opt.save : '保存中…');
+    if (opt.btn) opt.btn.disabled = true;
+    var done = function () { if (opt.btn) opt.btn.disabled = false; };
+    if (!window.google || !google.script || !google.script.run) {
+      done();
+      showStatus('err', 'この画面は Apps Script の Webアプリとして開いてください');
+      return;
+    }
+    var runner = google.script.run
+      .withSuccessHandler(function (res) {
+        done();
+        if (!res || typeof res !== 'object') {
+          showStatus('err', 'サーバーから正しい返事がありませんでした', function () { callRaw(fn, args, opt); });
+          if (opt.onErr) opt.onErr({ code: 'INTERNAL' });
+          return;
+        }
+        if (res.ok) {
+          if (saving) showStatus('ok', opt.ok || '保存しました');
+          if (opt.onOk) opt.onOk(res.data);
+          return;
+        }
+        var e = res.error || {};
+        if (e.code === 'AUTH' && fn !== 'adminLogin') { toLogin('ログインの期限が切れました。もう一度パスワードを入れてください'); return; }
+        var canRetry = e.code === 'BUSY' || e.code === 'INTERNAL';
+        if (e.code === 'BUSY') e.message = (e.message || '') + '(混んでいます。少し待ってもう一度)';
+        if (e.code === 'SETUP') e.message = '設定が終わっていません:' + (e.message || '');
+        showStatus('err', e.message || 'うまくいきませんでした', canRetry ? function () { callRaw(fn, args, opt); } : null);
+        if (opt.onErr) opt.onErr(e);
+      })
+      .withFailureHandler(function (err) {
+        done();
+        showStatus('err', '通信できませんでした。電波を確かめてください', function () { callRaw(fn, args, opt); });
+        if (opt.onErr) opt.onErr({ code: 'NETWORK', message: String(err && err.message || err) });
+      });
+    runner[fn].apply(runner, args);
+  }
+
+  // ============ ログイン ============
+  function toLogin(msg) {
+    S.token = '';
+    ssSet(TOKEN_KEY, '');
+    $('app').className = 'hidden';
+    $('login').className = 'login';
+    $('loginMsg').textContent = msg || '';
+    hideStatus();
+  }
+  function toApp() {
+    $('login').className = 'login hidden';
+    $('app').className = '';
+    switchTab(S.tab);
+  }
+  $('loginForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pw = $('pw').value;
+    if (!pw) return;
+    $('loginMsg').textContent = '';
+    callRaw('adminLogin', [pw], {
+      btn: $('loginBtn'),
+      onOk: function (d) {
+        S.token = d.token;
+        ssSet(TOKEN_KEY, d.token);
+        $('pw').value = '';
+        toApp();
+      },
+      onErr: function (er) { if (er && er.code === 'AUTH') { hideStatus(); $('loginMsg').textContent = er.message || 'パスワードが違います'; } }
+    });
+  });
+
+  // ============ 一覧の取得 ============
+  function loadOverview(after) {
+    api('adminGetOverview', [], {
+      onOk: function (d) {
+        S.ov = d;
+        S.offset = (d.serverNow || Date.now()) - Date.now();
+        updateHeader();
+        if (after) after();
+      }
+    });
+  }
+  function updateHeader() {
+    var st = S.ov && S.ov.state;
+    $('modePill').textContent = st ? '📱 ' + st.mode : '-';
+    $('topTitle').textContent = TAB_TITLE[S.tab];
+    var n = S.ov ? S.ov.pendingNearMisses : 0;
+    var dot = $('nearDot');
+    dot.textContent = n;
+    dot.className = n > 0 ? 'dot' : 'dot hidden';
+  }
+
+  // ============ タブ ============
+  $('tabs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-tab]');
+    if (b) switchTab(b.getAttribute('data-tab'));
+  });
+  $('reloadBtn').addEventListener('click', function () { refreshTab(true); });
+
+  function switchTab(tab) {
+    S.tab = tab;
+    if ($('status').className.indexOf('saving') < 0) hideStatus();
+    var bs = document.querySelectorAll('#tabs button');
+    for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-tab') === tab ? 'on' : '';
+    Object.keys(TAB_TITLE).forEach(function (t) { $('tab-' + t).className = t === tab ? 'tab' : 'tab hidden'; });
+    updateHeader();
+    window.scrollTo(0, 0);
+    if (S.ov) render();
+    refreshTab(true);
+  }
+
+  /** タブを開いたとき・↻・定期的に、最新を取り直す */
+  function refreshTab(force) {
+    var tab = S.tab;
+    loadOverview(function () {
+      if (tab !== S.tab) return;
+      if (tab === 'scores') { loadScores(); return; }
+      if (tab === 'quiz') { loadQuiz(force); return; }
+      loadPredSummaries();
+      safeRender();
+    });
+  }
+  function safeRender() { if (!inputFocused()) render(); }
+  function render() {
+    updateHeader();
+    if (!S.ov) return;
+    ({ progress: renderProgress, matches: renderMatches, scores: renderScores, quiz: renderQuiz, roster: renderRoster })[S.tab]();
+  }
+
+  // 定期的な取り直し(進行・クイズのタブだけ。入力中は画面を書き換えない)
+  setInterval(function () {
+    if (document.hidden || !S.token || $('app').className === 'hidden') return;
+    if (S.tab === 'progress' || S.tab === 'quiz') refreshTab(false);
+    else if (S.tab === 'matches') loadPredSummaries();
+  }, 12000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && S.token && $('app').className !== 'hidden') refreshTab(false);
+  });
+  // クイズの残り時間(1秒ごと。画面全体は書き換えない)
+  setInterval(function () {
+    var els = document.querySelectorAll('[data-clock]');
+    for (var i = 0; i < els.length; i++) els[i].textContent = quizClockText();
+  }, 1000);
+
+  // ============ 画面の中の操作(まとめて受ける) ============
+  var ACTIONS = {};
+  document.querySelector('main').addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el || el.disabled) return;
+    var fn = ACTIONS[el.getAttribute('data-act')];
+    if (fn) fn(el, e);
+  });
+  document.querySelector('main').addEventListener('input', function (e) {
+    var el = e.target;
+    var k = el.getAttribute('data-in');
+    if (k && INPUTS[k]) INPUTS[k](el);
+  });
+  document.querySelector('main').addEventListener('focusin', function (e) {
+    if (e.target.classList && (e.target.classList.contains('score') || e.target.classList.contains('num'))) {
+      try { e.target.select(); } catch (er) { /* 選べない入力欄もある */ }
+    }
+  });
+  document.querySelector('main').addEventListener('change', function (e) {
+    var el = e.target;
+    var k = el.getAttribute('data-chg');
+    if (k && CHANGES[k]) CHANGES[k](el);
+  });
+  var INPUTS = {};
+  var CHANGES = {};
+  document.querySelector('main').addEventListener('toggle', function (e) {
+    var k = e.target.getAttribute && e.target.getAttribute('data-key');
+    if (k) S.openDetails[k] = e.target.open;
+  }, true);
+
+  // ================================================================
+  // 進行タブ
+  // ================================================================
+  function renderProgress() {
+    var st = S.ov.state;
+    if (!S.ev) S.ev = { cur: st.currentEvent, next: st.nextEvent };
+    var h = '';
+
+    // 参加者の画面
+    h += '<div class="card"><h2>📱 参加者の画面<span class="right">' + (st.updatedAt ? clock(st.updatedAt) + ' 更新' : '') + '</span></h2>';
+    h += '<div class="center" style="margin:4px 0 12px"><div class="big-num">' + esc(st.mode) + '</div><div class="sub">' + esc(MODE_TEXT[st.mode] || '') + '</div></div>';
+    h += '<div class="seg c3">';
+    (st.modes || Object.keys(MODE_TEXT)).forEach(function (md) {
+      h += '<button data-act="mode" data-mode="' + esc(md) + '" class="' + (md === st.mode ? 'on' : '') + '">' + esc(md) + '</button>';
+    });
+    h += '</div>';
+    h += '<p class="sub" style="margin:8px 0 0">「クイズ」と「結果公開」は確認が出ます。予想は試合タブのバレーから始めるのがかんたんです。</p>';
+    h += '</div>';
+
+    // 種目
+    h += '<div class="card"><h2>📣 種目(待ち画面に出す)</h2>';
+    h += eventPicker('cur', '今の種目', S.ev.cur) + eventPicker('next', '次の種目', S.ev.next);
+    var changed = S.ev.cur !== st.currentEvent || S.ev.next !== st.nextEvent;
+    h += '<div class="row" style="margin-top:12px">';
+    h += '<button class="btn ghost grow" data-act="evAdvance">▶ 次の種目へ進める</button>';
+    h += '<button class="btn accent grow" data-act="evSave"' + (changed ? '' : ' disabled') + '>保存</button></div>';
+    h += '<p class="sub" style="margin:6px 0 0">いま:' + esc(st.currentEvent || '(なし)') + ' → 次:' + esc(st.nextEvent || '(なし)') + '</p>';
+    h += '</div>';
+
+    // 予想
+    var pm = st.predictionMatchId ? matchById(st.predictionMatchId) : null;
+    if (pm) {
+      h += '<div class="card"><h2>🏐 勝敗予想<span class="right">' + esc(pm.id) + '</span></h2>';
+      h += predBlock(pm, true);
+      h += '</div>';
+    }
+
+    // クイズ
+    h += '<div class="card"><h2>💡 クイズ</h2>' + quizControl() + '</div>';
+
+    // 結果発表
+    h += '<div class="card"><h2>🏆 結果発表</h2>';
+    h += '<p class="sub" style="margin:0 0 10px">順位タブで「運動だけ」→「仲良しポイント込み」の順に読み上げてから、公開を押します。</p>';
+    h += '<div class="row"><button class="btn ghost grow" data-act="goScores">順位を見る</button>';
+    h += '<button class="btn ng grow" data-act="publish"' + (st.mode === '結果公開' ? ' disabled' : '') + '>' + (st.mode === '結果公開' ? '公開済み' : '結果を全員に公開') + '</button></div>';
+    h += '</div>';
+
+    // 設定
+    h += '<div class="card">' + det('settings') + '<summary>⚙️ 配点・制限時間の設定</summary>' + settingsForm() + '</details></div>';
+
+    h += '<div class="center"><button class="link-btn" data-act="logout">ログアウト</button></div>';
+    $('tab-progress').innerHTML = h;
+  }
+
+  function eventPicker(key, label, val) {
+    var h = '<label class="f">' + label + '</label>';
+    h += '<div class="chips">';
+    EVENTS.forEach(function (ev) {
+      h += '<button class="chip' + (ev === val ? ' on' : '') + '" data-act="evPick" data-k="' + key + '" data-v="' + esc(ev) + '">' + esc(ev) + '</button>';
+    });
+    h += '<button class="chip' + (val === '' ? ' on' : '') + '" data-act="evPick" data-k="' + key + '" data-v="">なし</button>';
+    h += '</div>';
+    h += '<input class="t" style="margin-top:6px" data-in="ev" data-k="' + key + '" value="' + esc(val) + '" placeholder="自由に書いてもOK">';
+    return h;
+  }
+  ACTIONS.evPick = function (el) {
+    S.ev[el.getAttribute('data-k')] = el.getAttribute('data-v');
+    renderProgress();
+  };
+  INPUTS.ev = function (el) {
+    S.ev[el.getAttribute('data-k')] = el.value;
+    var st = S.ov.state;
+    var b = document.querySelector('[data-act="evSave"]');
+    if (b) b.disabled = S.ev.cur === st.currentEvent && S.ev.next === st.nextEvent;
+  };
+  ACTIONS.evAdvance = function () {
+    var st = S.ov.state;
+    var cur = st.nextEvent || EVENTS[EVENTS.indexOf(st.currentEvent) + 1] || '';
+    var i = EVENTS.indexOf(cur);
+    S.ev = { cur: cur, next: i >= 0 && i + 1 < EVENTS.length ? EVENTS[i + 1] : '' };
+    renderProgress();
+  };
+  ACTIONS.evSave = function (el) {
+    api('adminSetState', [{ currentEvent: S.ev.cur.trim(), nextEvent: S.ev.next.trim() }], {
+      save: true, btn: el,
+      onOk: function (st) { S.ov.state = st; S.ev = null; render(); }
+    });
+  };
+
+  ACTIONS.mode = function (el) {
+    var md = el.getAttribute('data-mode');
+    var st = S.ov.state;
+    if (md === st.mode && md !== 'クイズ') return;
+    if (md === 'クイズ') { confirmQuizStart(false); return; }
+    if (md === '結果公開') { confirmPublish(); return; }
+    if (md === '予想' && !st.predictionMatchId) {
+      showStatus('err', '予想する試合がまだ決まっていません。試合タブのバレーで「予想の受付を開始」を押してください');
+      return;
+    }
+    setMode(md, el);
+  };
+  function setMode(md, btn) {
+    api('adminSetState', [{ mode: md }], {
+      save: '切り替え中…', ok: '「' + md + '」にしました', btn: btn,
+      onOk: function (st) { S.ov.state = st; render(); }
+    });
+  }
+  ACTIONS.setMode = function (el) { setMode(el.getAttribute('data-mode'), el); };
+  ACTIONS.goScores = function () { S.scoreView = 'sports'; switchTab('scores'); };
+  ACTIONS.publish = function () { confirmPublish(); };
+  ACTIONS.logout = function () {
+    confirmBox('ログアウトしますか？', 'もう一度パスワードを入れると戻れます。', 'ログアウト', function () { toLogin(''); });
+  };
+
+  function confirmPublish() {
+    confirmBox('結果を全員に公開しますか？', '全員のスマホに総合結果(仲良しポイントの内訳も)が出ます。読み上げが終わってから押してください。', '公開する', function () {
+      api('adminPublishResults', [], {
+        save: '公開中…', ok: '結果を公開しました',
+        onOk: function (st) { S.ov.state = st; render(); }
+      });
+    }, true);
+  }
+
+  // ---- 設定 ----
+  function settingsForm() {
+    var rows = S.ov.settings || [];
+    if (!rows.length) return '<p class="sub">設定がありません</p>';
+    var h = '';
+    rows.forEach(function (r) {
+      var v = r.key in S.settingsDraft ? S.settingsDraft[r.key] : r.value;
+      h += '<label class="f">' + esc(r.key) + (r.description ? '<br><span style="font-size:12px">' + esc(r.description) + '</span>' : '') + '</label>';
+      h += '<input class="t" data-in="setting" data-k="' + esc(r.key) + '" value="' + esc(v) + '">';
+    });
+    h += '<div style="height:10px"></div><button class="btn block accent" data-act="saveSettings">設定を保存</button>';
+    h += '<p class="sub">保存すると、すぐ集計に反映されます(例:バレーのボーナスを5点に)。</p>';
+    return h;
+  }
+  INPUTS.setting = function (el) { S.settingsDraft[el.getAttribute('data-k')] = el.value; };
+  ACTIONS.saveSettings = function (el) {
+    var vals = {};
+    var rows = S.ov.settings || [];
+    rows.forEach(function (r) {
+      if (r.key in S.settingsDraft && String(S.settingsDraft[r.key]) !== String(r.value)) vals[r.key] = String(S.settingsDraft[r.key]).trim();
+    });
+    if (!Object.keys(vals).length) { showStatus('ok', '変更はありません'); return; }
+    api('adminSaveSettings', [vals], {
+      save: true, btn: el,
+      onOk: function (d) { S.ov.settings = d.rows; S.settingsDraft = {}; S.scores = null; render(); }
+    });
+  };
+
+  // ---- クイズの操作(進行タブとクイズタブで共通) ----
+  function quizClockText() {
+    var q = S.ov && S.ov.state && S.ov.state.quiz;
+    if (!q) return '';
+    var t = now();
+    if (t < q.nameEndsAt) return '名前の問題 残り ' + mmss((q.nameEndsAt - t) / 1000);
+    if (t < q.originEndsAt) return '出身地の問題 残り ' + mmss((q.originEndsAt - t) / 1000);
+    return '時間終了(' + clock(q.originEndsAt) + ')';
+  }
+  function quizControl() {
+    var st = S.ov.state;
+    var parts = S.ov.participants || [];
+    var arrived = parts.filter(function (p) { return p.arrivedAt; }).length;
+    var answered = parts.filter(function (p) { return p.quizAnswered; }).length;
+    var h = '';
+    if (st.quiz) {
+      h += '<p style="margin:0 0 6px">開始 ' + clock(st.quiz.startedAt) + '・<b data-clock>' + esc(quizClockText()) + '</b></p>';
+    } else {
+      h += '<p class="sub" style="margin:0 0 6px">まだ始めていません</p>';
+    }
+    h += '<p style="margin:0 0 10px">回答 <b style="font-size:22px">' + answered + '</b> 人 / 来場 ' + arrived + ' 人</p>';
+    h += '<button class="btn block big accent" data-act="quizStart">' + (st.quizStartedAt ? '🔁 クイズをやり直す(開始時刻を今に)' : '▶ クイズ開始') + '</button>';
+    if (st.mode === 'クイズ') {
+      h += '<div style="height:8px"></div><button class="btn block ghost" data-act="setMode" data-mode="結果待ち">クイズ終了 → 「結果待ち」にする</button>';
+    }
+    h += det('regen', 'margin-top:8px') + '<summary>チームを変えたあとに始めるとき</summary>' +
+      '<p class="sub">まだ答えていない人の問題を、今のチームで作り直してから開始します。</p>' +
+      '<button class="btn block ghost" data-act="quizRegen">問題を作り直して開始</button></details>';
+    return h;
+  }
+  function confirmQuizStart(regen) {
+    var st = S.ov.state;
+    var parts = S.ov.participants || [];
+    var arrived = parts.filter(function (p) { return p.arrivedAt; }).length;
+    var body = '全員のスマホがクイズ画面になり、名前 ' + setting('クイズ:名前の制限時間(秒)', 120) + '秒 → 出身地 ' +
+      setting('クイズ:出身地の制限時間(秒)', 15) + '秒 が始まります。\n来場 ' + arrived + '人 / 名簿 ' + parts.length + '人。スマホがない人は、先に名簿タブで「来場にする」を押してください。';
+    if (st.quizStartedAt) body = 'すでに ' + clock(st.quizStartedAt) + ' に開始しています。開始時刻を今にしてやり直します。\n' + body;
+    if (regen) body = 'まだ答えていない人の問題を作り直します。\n' + body;
+    confirmBox(regen ? '問題を作り直して開始しますか？' : 'クイズを開始しますか？', body, '開始する', function () {
+      api('adminStartQuiz', regen ? [{ regenerate: true }] : [], {
+        save: 'クイズを準備中…', ok: 'クイズを開始しました',
+        onOk: function (d) {
+          S.ov.state = d.state;
+          showStatus('ok', 'クイズを開始しました(問題 ' + d.generated + '人分を作成)');
+          render();
+        }
+      });
+    }, true);
+  }
+  ACTIONS.quizStart = function () { confirmQuizStart(false); };
+  ACTIONS.quizRegen = function () { confirmQuizStart(true); };
+
+  // ================================================================
+  // 試合タブ
+  // ================================================================
+  function sportOfEvent(ev) {
+    if (!ev) return null;
+    if (ev.indexOf('バスケ') >= 0) return 'バスケ';
+    if (ev.indexOf('バド') >= 0) return 'バド';
+    if (ev.indexOf('ドッジ') >= 0) return 'ドッジ';
+    if (ev.indexOf('バレー') >= 0) return 'バレー';
+    return null;
+  }
+  function renderMatches() {
+    var ms = S.ov.matches || [];
+    if (!S.sport) S.sport = sportOfEvent(S.ov.state.currentEvent) || firstOpenSport(ms);
+    var h = '<div class="seg c4" style="margin-bottom:12px">';
+    SPORTS.forEach(function (sp) {
+      var list = ms.filter(function (m) { return m.sport === sp.key; });
+      var done = list.filter(function (m) { return m.status === '確定'; }).length;
+      h += '<button data-act="sport" data-v="' + sp.key + '" class="' + (sp.key === S.sport ? 'on' : '') + '">' +
+        sp.icon + ' ' + sp.key + '<br><span style="font-size:11px;font-weight:400">' + done + '/' + list.length + ' 確定</span></button>';
+    });
+    h += '</div>';
+    if (S.sport === 'バスケ') h += '<div class="note warn">🏀 点数は<b>前半+後半(クイズ)の合計</b>を入れてください。</div>';
+    if (S.sport === 'バド' || S.sport === 'バレー') h += '<div class="note">準決勝が2試合とも確定すると、決勝・3位決定戦の対戦が自動で入ります。引き分けでは確定できません。</div>';
+    if (S.sport === 'ドッジ') h += '<div class="note">G-3・G-4 の対戦は、バドの準決勝が2試合とも確定すると自動で入ります。</div>';
+    ms.filter(function (m) { return m.sport === S.sport; }).forEach(function (m) { h += matchCard(m); });
+    $('tab-matches').innerHTML = h;
+  }
+  function firstOpenSport(ms) {
+    for (var i = 0; i < SPORTS.length; i++) {
+      var k = SPORTS[i].key;
+      if (ms.some(function (m) { return m.sport === k && m.status !== '確定'; })) return k;
+    }
+    return 'バスケ';
+  }
+  ACTIONS.sport = function (el) { S.sport = el.getAttribute('data-v'); renderMatches(); loadPredSummaries(); };
+
+  function draftOf(m) {
+    var d = S.drafts[m.id];
+    return d || { s1: m.score1 === null || m.score1 === undefined ? '' : String(m.score1), s2: m.score2 === null || m.score2 === undefined ? '' : String(m.score2) };
+  }
+  function isDirty(m) {
+    var d = S.drafts[m.id];
+    if (!d) return false;
+    return String(d.s1) !== String(m.score1 === null ? '' : m.score1) || String(d.s2) !== String(m.score2 === null ? '' : m.score2);
+  }
+  function matchCard(m) {
+    var confirmed = m.status === '確定';
+    var dirty = isDirty(m);
+    var h = '<div class="card match" id="match-' + esc(m.id) + '">';
+    h += '<div class="head"><span class="round">' + esc(m.round) + '</span><span class="sub">' + esc(m.id) + '</span>';
+    if (m.related) { var rm = matchById(m.related); h += '<span class="sub">(' + esc(rm ? matchLabel(rm) : m.related) + 'と同時)</span>'; }
+    h += '<span style="margin-left:auto"></span>';
+    if (m.sport === 'バレー' && m.predictionStatus !== 'なし') h += '<span class="badge pred">予想:' + esc(m.predictionStatus) + '</span> ';
+    h += dirty ? '<span class="badge dirty">未保存</span>' : (confirmed ? '<span class="badge done">確定 ✓</span>' : '<span class="badge">予定</span>');
+    h += '</div>';
+
+    if (!m.team1 || !m.team2) {
+      h += '<div class="note">対戦チームはまだ決まっていません(準決勝の確定で自動で入ります)。</div>';
+      h += teamFixer(m);
+      h += '</div>';
+      return h;
+    }
+    var d = draftOf(m);
+    h += '<div class="scorebox">';
+    h += scoreSide(m, 1, m.team1, d.s1);
+    h += '<div class="vs">-</div>';
+    h += scoreSide(m, 2, m.team2, d.s2);
+    h += '</div>';
+    h += '<div class="actions">';
+    if (!confirmed) h += '<button class="btn block big accent" data-act="saveMatch" data-id="' + esc(m.id) + '">確定</button>';
+    else if (dirty) h += '<button class="btn block big accent" data-act="saveMatch" data-id="' + esc(m.id) + '">修正して確定</button>';
+    else h += '<button class="btn block big ghost" disabled>確定済み ' + esc(m.team1) + ' ' + esc(m.score1) + ' - ' + esc(m.score2) + ' ' + esc(m.team2) + '</button>';
+    h += '<div class="row" style="justify-content:space-between">';
+    if (dirty) h += '<button class="link-btn" data-act="resetDraft" data-id="' + esc(m.id) + '">入力を元に戻す</button>';
+    else h += '<span></span>';
+    if (confirmed) h += '<button class="link-btn" data-act="unconfirm" data-id="' + esc(m.id) + '">確定を取り消す</button>';
+    h += '</div>';
+    h += det('fix-' + m.id) + '<summary>対戦チームを直す</summary>' + teamFixer(m) + '</details>';
+    h += '</div>';
+    if (m.sport === 'バレー') h += '<div class="pred-box">' + predBlock(m, false) + '</div>';
+    h += '</div>';
+    return h;
+  }
+  function scoreSide(m, n, team, val) {
+    return '<div class="side soft' + esc(team) + '"><div class="tname">' + teamChip(team) + ' チーム' + esc(team) + '</div>' +
+      '<input class="score" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" enterkeyhint="' + (n === 1 ? 'next' : 'done') + '"' +
+      ' data-in="score" data-id="' + esc(m.id) + '" data-n="' + n + '" value="' + esc(val) + '" aria-label="チーム' + esc(team) + 'の点数"></div>';
+  }
+  function teamFixer(m) {
+    var h = '<div class="row" style="margin-top:8px">';
+    [1, 2].forEach(function (n) {
+      var cur = n === 1 ? m.team1 : m.team2;
+      h += '<select class="t grow" id="fix-' + esc(m.id) + '-' + n + '"><option value="">-</option>';
+      TEAMS.forEach(function (t) { h += '<option value="' + t + '"' + (t === cur ? ' selected' : '') + '>' + TEAM_MARK[t] + ' ' + t + '</option>'; });
+      h += '</select>';
+      if (n === 1) h += '<span class="vs">vs</span>';
+    });
+    h += '<button class="btn small" data-act="fixTeams" data-id="' + esc(m.id) + '">保存</button></div>';
+    return h;
+  }
+  INPUTS.score = function (el) {
+    var id = el.getAttribute('data-id');
+    var m = matchById(id);
+    var d = S.drafts[id] || draftOf(m);
+    d['s' + el.getAttribute('data-n')] = el.value;
+    S.drafts[id] = d;
+    // バッジとボタンだけ書き換える(入力欄はそのまま)
+    var card = $('match-' + id);
+    var dirty = isDirty(m);
+    var badge = card.querySelector('.head .badge:last-child');
+    if (badge) {
+      badge.className = 'badge' + (dirty ? ' dirty' : (m.status === '確定' ? ' done' : ''));
+      badge.textContent = dirty ? '未保存' : (m.status === '確定' ? '確定 ✓' : '予定');
+    }
+    if (m.status === '確定') {
+      var act = card.querySelector('.actions > .btn');
+      if (act) {
+        act.disabled = !dirty;
+        act.className = 'btn block big ' + (dirty ? 'accent' : 'ghost');
+        act.setAttribute('data-act', 'saveMatch');
+        act.setAttribute('data-id', id);
+        act.textContent = dirty ? '修正して確定' : '確定済み';
+      }
+    }
+  };
+  // 2つ目の点数で「完了」を押したら確定(キーボードから手を離さずに済む)
+  document.querySelector('main').addEventListener('keydown', function (e) {
+    var el = e.target;
+    if (e.key !== 'Enter' || !el.classList || !el.classList.contains('score')) return;
+    e.preventDefault();
+    if (el.getAttribute('data-n') === '1') {
+      var next = document.querySelector('input.score[data-id="' + el.getAttribute('data-id') + '"][data-n="2"]');
+      if (next) next.focus();
+    } else {
+      el.blur();
+      var b = document.querySelector('[data-act="saveMatch"][data-id="' + el.getAttribute('data-id') + '"]');
+      if (b && !b.disabled) ACTIONS.saveMatch(b);
+    }
+  });
+  ACTIONS.resetDraft = function (el) { delete S.drafts[el.getAttribute('data-id')]; renderMatches(); };
+  ACTIONS.saveMatch = function (el) {
+    var id = el.getAttribute('data-id');
+    var m = matchById(id);
+    var d = draftOf(m);
+    var s1 = String(d.s1).trim(), s2 = String(d.s2).trim();
+    if (s1 === '' || s2 === '') { showStatus('err', '2チームとも点数を入れてください'); return; }
+    var n1 = Number(s1), n2 = Number(s2);
+    if (isNaN(n1) || isNaN(n2) || n1 < 0 || n2 < 0) { showStatus('err', '点数は0以上の数で入れてください'); return; }
+    if ((m.sport === 'バド' || m.sport === 'バレー') && n1 === n2) { showStatus('err', 'トーナメントの試合は引き分けにできません'); return; }
+    var wasConfirmed = m.status === '確定';
+    api('adminSaveMatch', [id, n1, n2], {
+      save: true, btn: el,
+      onOk: function (r) {
+        delete S.drafts[id];
+        replaceMatch(r.match);
+        (r.changes || []).forEach(function (c) {
+          var x = matchById(c.id);
+          if (x) { x.team1 = c.team1; x.team2 = c.team2; }
+        });
+        S.scores = null;
+        var msg = (wasConfirmed ? '修正しました ' : '確定しました ') + r.match.team1 + ' ' + r.match.score1 + '-' + r.match.score2 + ' ' + r.match.team2;
+        if (r.changes && r.changes.length) {
+          msg += '/自動で入れた対戦:' + r.changes.map(function (c) { var x = matchById(c.id); return (x ? x.sport + x.round : c.id) + ' ' + c.team1 + '-' + c.team2; }).join('、');
+        }
+        showStatus('ok', msg);
+        render();
+      }
+    });
+  };
+  function replaceMatch(nm) {
+    var ms = S.ov.matches;
+    for (var i = 0; i < ms.length; i++) if (ms[i].id === nm.id) { ms[i] = nm; return; }
+  }
+  ACTIONS.unconfirm = function (el) {
+    var id = el.getAttribute('data-id');
+    var m = matchById(id);
+    confirmBox('確定を取り消しますか？', matchLabel(m) + ' を「予定」に戻します(点数は残ります)。集計から外れます。', '取り消す', function () {
+      api('adminUnconfirmMatch', [id], {
+        save: true, ok: '「予定」に戻しました',
+        onOk: function (r) { replaceMatch(r.match); S.scores = null; render(); }
+      });
+    });
+  };
+  ACTIONS.fixTeams = function (el) {
+    var id = el.getAttribute('data-id');
+    var t1 = $('fix-' + id + '-1').value, t2 = $('fix-' + id + '-2').value;
+    if (!t1 || !t2 || t1 === t2) { showStatus('err', 'ちがう2チームを選んでください'); return; }
+    api('adminSetMatchTeams', [id, t1, t2], {
+      save: true, btn: el,
+      onOk: function (r) { replaceMatch(r.match); S.scores = null; render(); }
+    });
+  };
+
+  // ---- バレーの予想 ----
+  function predBlock(m, inProgressTab) {
+    var st = S.ov.state;
+    var ps = m.predictionStatus;
+    var isCurrent = st.predictionMatchId === m.id && st.mode === '予想';
+    var h = '<div class="row"><b>🗳 勝敗予想</b><span class="sub grow">' + (inProgressTab ? esc(matchLabel(m)) + ' ' + esc(m.team1) + ' vs ' + esc(m.team2) : '') + '</span>';
+    h += '<span class="badge pred">' + esc(ps) + '</span></div>';
+    if (!m.team1 || !m.team2) return h + '<p class="sub">対戦が決まったら受付できます。</p>';
+    if (ps === '受付中' || ps === '公開') h += predSummaryHtml(m);
+    h += '<div style="height:6px"></div>';
+    if (ps === 'なし' || ps === '受付前') {
+      h += '<button class="btn block accent" data-act="predOpen" data-id="' + esc(m.id) + '">予想の受付を開始</button>';
+      h += '<p class="sub" style="margin:4px 0 0">押すと、試合に出ていないチームのスマホが予想の画面になります。</p>';
+    } else if (ps === '受付中') {
+      h += '<button class="btn block big ng" data-act="predClose" data-id="' + esc(m.id) + '">締め切って公開</button>';
+      h += '<p class="sub" style="margin:4px 0 0">試合が始まって3分くらいで締め切ります。</p>';
+    } else if (ps === '公開') {
+      h += '<button class="link-btn" data-act="predReopen" data-id="' + esc(m.id) + '">受付中に戻す</button>';
+    }
+    if (isCurrent && (ps === '公開' || m.status === '確定')) {
+      h += '<button class="btn block ghost" data-act="setMode" data-mode="待ち">参加者の画面を「待ち」に戻す</button>';
+    } else if (st.predictionMatchId === m.id && st.mode !== '予想' && ps === '受付中') {
+      h += '<button class="btn block ghost" data-act="setMode" data-mode="予想">参加者の画面を「予想」にする</button>';
+    }
+    return h;
+  }
+  function predSummaryHtml(m) {
+    var s = S.pred[m.id];
+    if (!s) return '<p class="sub">集まり具合を読み込み中…</p>';
+    var h = '';
+    (s.teams || []).forEach(function (t) {
+      h += '<div class="pred-team">' + teamChip(t.team) + '<span>予想 <b style="font-size:20px">' + t.predicted + '</b> / 来場 ' + t.arrived + '人</span>' +
+        (t.complete ? '<span class="badge done">そろった</span>' : '') +
+        '<span class="sub" style="margin-left:auto">' + (t.counts || []).map(function (c) { return esc(c.team) + '勝ち ' + c.count; }).join('・') + '</span></div>';
+    });
+    h += '<button class="link-btn" data-act="predRefresh" data-id="' + esc(m.id) + '">↻ 集まり具合を更新</button>';
+    return h;
+  }
+  function loadPredSummaries() {
+    if (!S.ov) return;
+    var ids = (S.ov.matches || []).filter(function (m) {
+      return m.sport === 'バレー' && (m.predictionStatus === '受付中' || (m.predictionStatus === '公開' && !S.pred[m.id]));
+    }).map(function (m) { return m.id; });
+    if (S.tab === 'progress' && S.ov.state.predictionMatchId && ids.indexOf(S.ov.state.predictionMatchId) < 0) {
+      var pm = matchById(S.ov.state.predictionMatchId);
+      if (pm && pm.predictionStatus === '公開' && !S.pred[pm.id]) ids.push(pm.id);
+    }
+    ids.forEach(function (id) { loadPred(id); });
+  }
+  function loadPred(id) {
+    api('adminGetPredictionSummary', [id], {
+      onOk: function (d) {
+        S.pred[id] = d;
+        replaceMatch(d.match);
+        if (S.tab === 'progress' || S.tab === 'matches') safeRender();
+      }
+    });
+  }
+  ACTIONS.predRefresh = function (el) { loadPred(el.getAttribute('data-id')); };
+  function setPredStatus(id, status, btn, okMsg) {
+    api('adminSetPredictionStatus', [id, status], {
+      save: true, ok: okMsg, btn: btn,
+      onOk: function (d) {
+        S.pred[id] = d;
+        replaceMatch(d.match);
+        if (status === '受付中') { S.ov.state.mode = '予想'; S.ov.state.predictionMatchId = id; }
+        render();
+        loadOverview(function () { safeRender(); });
+      }
+    });
+  }
+  ACTIONS.predOpen = function (el) { setPredStatus(el.getAttribute('data-id'), '受付中', el, '予想の受付を始めました'); };
+  ACTIONS.predReopen = function (el) { setPredStatus(el.getAttribute('data-id'), '受付中', el, '受付中に戻しました'); };
+  ACTIONS.predClose = function (el) {
+    var m = matchById(el.getAttribute('data-id'));
+    confirmBox('予想を締め切って公開しますか？', matchLabel(m) + '(' + m.team1 + ' vs ' + m.team2 + ')の予想を締め切ります。全チームの予想人数が見られるようになり、もう変更できません。', '締め切って公開', function () {
+      setPredStatus(m.id, '公開', null, '予想を締め切りました');
+    }, true);
+  };
+
+  // ================================================================
+  // 順位タブ
+  // ================================================================
+  function loadScores() {
+    api('adminGetScores', [], {
+      onOk: function (d) { S.scores = d; if (S.tab === 'scores') renderScores(); }
+    });
+  }
+  function teamRow(teams, t) {
+    for (var i = 0; i < teams.length; i++) if (teams[i].team === t) return teams[i];
+    return {};
+  }
+  function renderScores() {
+    var el = $('tab-scores');
+    if (!S.scores) { el.innerHTML = '<div class="card center sub">集計を読み込み中…</div>'; return; }
+    var sc = S.scores;
+    var total = S.scoreView === 'total';
+    var h = '<div class="seg c2" style="margin-bottom:8px">' +
+      '<button data-act="scoreView" data-v="sports" class="' + (!total ? 'on' : '') + '">① 運動だけ</button>' +
+      '<button data-act="scoreView" data-v="total" class="' + (total ? 'on' : '') + '">② 仲良しポイント込み</button></div>';
+    h += '<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="sub">' +
+      (total ? '総合(運動+仲良しポイント)' : '仲良しポイントを足す前') + '</span><div class="chips">' +
+      '<button class="chip' + (S.scoreOrder === 'up' ? ' on' : '') + '" data-act="scoreOrder" data-v="up">4位から</button>' +
+      '<button class="chip' + (S.scoreOrder === 'down' ? ' on' : '') + '" data-act="scoreOrder" data-v="down">1位から</button></div></div>';
+
+    var ranking = (total ? sc.totalRanking : sc.sportsRanking).slice();
+    if (S.scoreOrder === 'up') ranking.reverse();
+    ranking.forEach(function (r) {
+      var t = teamRow(sc.teams, r.team);
+      var detail = total
+        ? '運動 ' + fmt1(t.sportsTotal) + ' + 仲良し ' + fmt1(t.nakayoshiTotal) + '(クイズ ' + fmt1(t.quiz) + '・お題 ' + fmt1(t.odai) + '・予想 ' + fmt1(t.prediction) + ')'
+        : 'バスケ ' + fmt1(t.basketball) + '・バド ' + fmt1(t.badminton) + '・ドッジ ' + fmt1(t.dodgeball) + '・バレー ' + fmt1(t.volleyball);
+      h += '<div class="rank-row soft' + esc(r.team) + '"><div class="rk">' + r.rank + '<small>位</small></div>' + teamChip(r.team, true) +
+        '<div class="grow"><div class="pts" style="text-align:right">' + fmt1(r.points) + '<small>点</small></div><div class="detail">' + esc(detail) + '</div></div></div>';
+    });
+
+    // 注意(まだ点が入っていない種目)
+    var stg = sc.standings || {};
+    var warn = [];
+    if (stg.basketball && !stg.basketball.complete) warn.push('バスケは全試合が確定するまで順位点0');
+    if (stg.dodgeball && !stg.dodgeball.complete) warn.push('ドッジは全試合が確定するまで順位点0');
+    if (stg.badminton && !stg.badminton.complete) warn.push('バドは決勝・3位決定戦の確定まで一部0');
+    if (stg.volleyball && !stg.volleyball.complete) warn.push('バレーは確定した試合の分だけ');
+    if (warn.length) h += '<div class="note warn">⚠️ ' + esc(warn.join('/')) + '</div>';
+
+    // 内訳の表
+    h += '<div class="card"><h2>内訳</h2><table class="bd"><thead><tr><th></th>';
+    TEAMS.forEach(function (t) { h += '<th>' + teamChip(t) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    var lines = total
+      ? [['運動の合計', 'sportsTotal'], ['クイズ', 'quiz'], ['お題カード', 'odai'], ['勝敗予想', 'prediction'], ['仲良しの合計', 'nakayoshiTotal', 1], ['総合', 'total', 1], ['総合順位', 'totalRank', 2]]
+      : [['バスケ', 'basketball'], ['バド', 'badminton'], ['ドッジ', 'dodgeball'], ['バレー', 'volleyball'], ['運動の合計', 'sportsTotal', 1], ['運動の順位', 'sportsRank', 2]];
+    lines.forEach(function (ln) {
+      h += '<tr' + (ln[2] ? ' class="sum"' : '') + '><td>' + ln[0] + '</td>';
+      TEAMS.forEach(function (t) {
+        var v = teamRow(sc.teams, t)[ln[1]];
+        h += '<td>' + (ln[2] === 2 ? esc(v) + '位' : fmt1(v)) + '</td>';
+      });
+      h += '</tr>';
+    });
+    if (total) {
+      h += '<tr><td class="sub">名前の正答率</td>';
+      TEAMS.forEach(function (t) { h += '<td class="sub">' + pct(teamRow(sc.teams, t).quizNameRate) + '</td>'; });
+      h += '</tr><tr><td class="sub">出身地の正答率</td>';
+      TEAMS.forEach(function (t) { h += '<td class="sub">' + pct(teamRow(sc.teams, t).quizOriginRate) + '</td>'; });
+      h += '</tr>';
+    }
+    h += '</tbody></table>';
+    if (!total) h += sportsStandingsHtml(stg);
+    h += '</div>';
+
+    if (total) {
+      var st = S.ov.state;
+      h += '<button class="btn block big ng" data-act="publish"' + (st.mode === '結果公開' ? ' disabled' : '') + '>' +
+        (st.mode === '結果公開' ? '公開済み' : '読み上げが終わったら:結果を全員に公開') + '</button>';
+    } else {
+      h += '<button class="btn block big accent" data-act="scoreView" data-v="total">② 仲良しポイント込みへ ▶</button>';
+    }
+    el.innerHTML = h;
+  }
+  function sportsStandingsHtml(stg) {
+    var h = det('standings', 'margin-top:8px') + '<summary>種目ごとの成績</summary>';
+    if (stg.basketball) {
+      h += '<p style="margin:8px 0 4px"><b>🏀 バスケ</b>(勝ち数 → 得失点差)</p>';
+      h += standingsTable(stg.basketball.standings, true);
+    }
+    if (stg.dodgeball) {
+      h += '<p style="margin:8px 0 4px"><b>🤾 ドッジ</b>(勝ち数)</p>';
+      h += standingsTable(stg.dodgeball.standings, false);
+    }
+    if (stg.badminton) {
+      h += '<p style="margin:8px 0 4px"><b>🏸 バド</b></p><p class="sub" style="margin:0">' +
+        TEAMS.map(function (t) { var r = (stg.badminton.ranks || {})[t]; return t + ':' + (r ? r + '位' : '-'); }).join('　') + '</p>';
+    }
+    if (stg.volleyball) {
+      h += '<p style="margin:8px 0 4px"><b>🏐 バレー</b>(取った点+勝ちボーナス)</p><p class="sub" style="margin:0">' +
+        TEAMS.map(function (t) { return t + ':' + ((stg.volleyball.scored || {})[t] || 0) + '点・' + ((stg.volleyball.wins || {})[t] || 0) + '勝'; }).join('　') + '</p>';
+    }
+    return h + '</details>';
+  }
+  function standingsTable(rows, withDiff) {
+    rows = (rows || []).slice().sort(function (a, b) { return (a.rank || 9) - (b.rank || 9); });
+    var h = '<table class="bd"><thead><tr><th>チーム</th><th>試合</th><th>勝ち</th>' + (withDiff ? '<th>得失点差</th>' : '') + '<th>順位</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr><td>' + teamChip(r.team) + '</td><td>' + esc(r.played) + '</td><td>' + esc(r.wins) + '</td>' +
+        (withDiff ? '<td>' + esc(r.diff) + '</td>' : '') + '<td>' + (r.rank ? esc(r.rank) + '位' : '-') + '</td></tr>';
+    });
+    return h + '</tbody></table>';
+  }
+  ACTIONS.scoreView = function (el) { S.scoreView = el.getAttribute('data-v'); renderScores(); window.scrollTo(0, 0); };
+  ACTIONS.scoreOrder = function (el) { S.scoreOrder = el.getAttribute('data-v'); renderScores(); };
+
+  // ================================================================
+  // クイズタブ
+  // ================================================================
+  function loadQuiz(withOdai) {
+    var left = withOdai || !S.odai ? 3 : 2;
+    var fin = function () { if (--left === 0 && S.tab === 'quiz') safeRender(); };
+    api('adminGetQuizStatus', [], { onOk: function (d) { S.quizStatus = d; fin(); }, onErr: fin });
+    api('adminListNearMisses', [S.showJudged], { onOk: function (d) { S.near = d.items || []; fin(); }, onErr: fin });
+    if (withOdai || !S.odai) api('adminGetOdai', [], { onOk: function (d) { S.odai = d; fin(); }, onErr: fin });
+  }
+  function renderQuiz() {
+    var h = '';
+    // 状況
+    h += '<div class="card"><h2>💡 クイズの状況</h2>' + quizControl();
+    if (S.quizStatus) {
+      h += '<table class="bd" style="margin-top:12px"><thead><tr><th>チーム</th><th>回答/来場</th><th>名前</th><th>出身地</th><th>点</th></tr></thead><tbody>';
+      S.quizStatus.teams.forEach(function (t) {
+        h += '<tr><td>' + teamChip(t.team) + '</td><td><b>' + t.answered + '</b> / ' + t.arrived + '</td><td>' + pct(t.nameRate) + '</td><td>' + pct(t.originRate) + '</td><td>' + fmt1(t.points) + '</td></tr>';
+      });
+      h += '</tbody></table>';
+    }
+    h += '</div>';
+
+    // 惜しい答え
+    var items = S.near || [];
+    var pending = items.filter(function (x) { return x.judgement === '未'; }).length;
+    h += '<div class="card"><h2>🤔 惜しい答え<span class="right">未判定 ' + pending + '件</span></h2>';
+    h += '<label class="switch" style="margin-bottom:8px"><input type="checkbox" data-chg="showJudged"' + (S.showJudged ? ' checked' : '') + '> 判定済みも表示</label>';
+    if (!S.near) h += '<p class="sub">読み込み中…</p>';
+    else if (!items.length) h += '<p class="sub">いまはありません。</p>';
+    items.forEach(function (x) {
+      h += '<div class="nm-item">';
+      h += '<div class="row">' + teamChip(x.team) + '<span class="sub grow">' + esc(x.participantName) + ' さんの答え</span>' +
+        (x.judgement !== '未' ? '<span class="badge ' + (x.judgement === 'OK' ? 'done' : '') + '">' + esc(x.judgement) + '</span>' : '') + '</div>';
+      h += x.input !== null && x.input !== undefined && x.input !== ''
+        ? '<div class="input">「' + esc(x.input) + '」</div>'
+        : '<div class="noinput">(入力は表示できません)</div>';
+      h += '<div class="sub">近い人:<b style="color:var(--ink);font-size:16px">' + esc(x.candidateName) + '</b>' + (x.candidateKana ? '(' + esc(x.candidateKana) + ')' : '') + '</div>';
+      h += '<div class="row" style="margin-top:8px">' +
+        '<button class="btn ng grow" data-act="judge" data-no="' + x.number + '" data-d="NG"' + (x.judgement === 'NG' ? ' disabled' : '') + '>NG</button>' +
+        '<button class="btn ok grow" data-act="judge" data-no="' + x.number + '" data-d="OK"' + (x.judgement === 'OK' ? ' disabled' : '') + '>OK(正解にする)</button></div>';
+      h += '</div>';
+    });
+    h += '</div>';
+
+    // お題カード
+    h += '<div class="card"><h2>🃏 お題カード</h2>' + odaiForm() + '</div>';
+    $('tab-quiz').innerHTML = h;
+  }
+  CHANGES.showJudged = function (el) { S.showJudged = el.checked; S.near = null; renderQuiz(); loadQuiz(false); };
+  ACTIONS.judge = function (el) {
+    var no = Number(el.getAttribute('data-no'));
+    var d = el.getAttribute('data-d');
+    api('adminJudgeNearMiss', [no, d], {
+      save: true, ok: d === 'OK' ? '正解にしました' : 'NGにしました', btn: el,
+      onOk: function () {
+        S.near = (S.near || []).map(function (x) { if (x.number === no) x.judgement = d; return x; })
+          .filter(function (x) { return S.showJudged || x.judgement === '未'; });
+        if (S.ov) S.ov.pendingNearMisses = S.near.filter(function (x) { return x.judgement === '未'; }).length;
+        S.scores = null;
+        renderQuiz();
+        api('adminGetQuizStatus', [], { onOk: function (q) { S.quizStatus = q; safeRender(); } });
+      }
+    });
+  };
+
+  // ---- お題カード ----
+  function odaiRow(no, t) {
+    var rows = (S.odai && S.odai.rows) || [];
+    for (var i = 0; i < rows.length; i++) if (rows[i].number === no && rows[i].team === t) return rows[i];
+    return null;
+  }
+  function odaiDraft(no) {
+    if (S.odaiDraft[no]) return S.odaiDraft[no];
+    var theme = '';
+    var teams = {};
+    var defs = (S.odai && S.odai.defaultAnswered) || {};
+    TEAMS.forEach(function (t) {
+      var r = odaiRow(no, t);
+      if (r && r.theme && !theme) theme = r.theme;
+      teams[t] = r ? { matched: String(r.matched), answered: String(r.answered) } : { matched: '', answered: String(defs[t] === undefined ? '' : defs[t]) };
+    });
+    S.odaiDraft[no] = { theme: theme, teams: teams };
+    return S.odaiDraft[no];
+  }
+  function odaiPoints(matched, answered) {
+    var m = Number(matched), a = Number(answered);
+    if (matched === '' || answered === '' || isNaN(m) || isNaN(a) || a <= 0 || m > a) return null;
+    return m === a ? setting('お題カード:全員一致の点', 2) : setting('お題カード:それ以外の係数', 1.5) * m / a;
+  }
+  function odaiForm() {
+    if (!S.odai) return '<p class="sub">読み込み中…</p>';
+    var no = S.odaiNo;
+    var d = odaiDraft(no);
+    var h = '<div class="seg c3" style="margin-bottom:10px">';
+    [1, 2, 3].forEach(function (n) {
+      var cnt = TEAMS.filter(function (t) { return odaiRow(n, t); }).length;
+      h += '<button data-act="odaiNo" data-v="' + n + '" class="' + (n === no ? 'on' : '') + '">お題' + n + '<br><span style="font-size:11px;font-weight:400">' + cnt + '/4 入力済み</span></button>';
+    });
+    h += '</div>';
+    h += '<input class="t" data-in="odaiTheme" value="' + esc(d.theme) + '" placeholder="お題(例:好きな果物)">';
+    h += '<p class="sub" style="margin:8px 0 4px">そろった人数 / 答えた人数(答えた人数は来場人数が入っています)</p>';
+    TEAMS.forEach(function (t) {
+      var v = d.teams[t];
+      var p = odaiPoints(v.matched, v.answered);
+      var saved = odaiRow(no, t);
+      h += '<div class="row soft' + t + '" style="border-radius:12px;padding:8px;margin-bottom:6px">' + teamChip(t) +
+        '<input class="num" type="number" inputmode="numeric" min="0" data-in="odai" data-t="' + t + '" data-k="matched" value="' + esc(v.matched) + '" aria-label="' + t + 'のそろった人数">' +
+        '<span>/</span>' +
+        '<input class="num" type="number" inputmode="numeric" min="0" data-in="odai" data-t="' + t + '" data-k="answered" value="' + esc(v.answered) + '" aria-label="' + t + 'の答えた人数">' +
+        '<span class="grow" style="text-align:right;font-weight:700" id="odaiPts-' + t + '">' + (p === null ? '' : fmt1(p) + '点') + '</span>' +
+        (saved ? '<span class="badge done">✓</span>' : '') + '</div>';
+    });
+    h += '<button class="btn block big accent" data-act="odaiSave" style="margin-top:6px">お題' + no + 'を保存</button>';
+    h += '<p class="sub">全員そろったら ' + fmt1(setting('お題カード:全員一致の点', 2)) + '点、それ以外は ' + fmt1(setting('お題カード:それ以外の係数', 1.5)) + ' × そろった人数 ÷ 答えた人数。空欄のチームは保存しません。</p>';
+    return h;
+  }
+  ACTIONS.odaiNo = function (el) { S.odaiNo = Number(el.getAttribute('data-v')); renderQuiz(); };
+  INPUTS.odaiTheme = function (el) { odaiDraft(S.odaiNo).theme = el.value; };
+  INPUTS.odai = function (el) {
+    var t = el.getAttribute('data-t');
+    var v = odaiDraft(S.odaiNo).teams[t];
+    v[el.getAttribute('data-k')] = el.value;
+    var p = odaiPoints(v.matched, v.answered);
+    var out = $('odaiPts-' + t);
+    if (out) out.textContent = p === null ? '' : fmt1(p) + '点';
+  };
+  ACTIONS.odaiSave = function (el) {
+    var no = S.odaiNo;
+    var d = odaiDraft(no);
+    var jobs = [];
+    for (var i = 0; i < TEAMS.length; i++) {
+      var t = TEAMS[i], v = d.teams[t];
+      if (String(v.matched).trim() === '') continue;
+      var m = Number(v.matched), a = Number(v.answered);
+      if (isNaN(m) || isNaN(a) || m < 0 || a < 0 || String(v.answered).trim() === '') { showStatus('err', 'チーム' + t + 'の人数を数字で入れてください'); return; }
+      if (m > a) { showStatus('err', 'チーム' + t + ':そろった人数が答えた人数より多いです'); return; }
+      jobs.push({ number: no, theme: d.theme.trim(), team: t, matched: m, answered: a });
+    }
+    if (!jobs.length) { showStatus('err', 'そろった人数を入れてください'); return; }
+    el.disabled = true;
+    var k = 0;
+    var next = function () {
+      if (k >= jobs.length) {
+        el.disabled = false;
+        showStatus('ok', 'お題' + no + 'を保存しました(' + jobs.length + 'チーム)');
+        delete S.odaiDraft[no];
+        S.scores = null;
+        api('adminGetOdai', [], { onOk: function (o) { S.odai = o; if (S.tab === 'quiz') safeRender(); } });
+        return;
+      }
+      var job = jobs[k];
+      api('adminSaveOdai', [job], {
+        save: '保存中…(' + (k + 1) + '/' + jobs.length + ')',
+        onOk: function () {
+          // 保存できた分を手元にも入れる
+          var rows = S.odai.rows, found = false;
+          rows.forEach(function (r) { if (r.number === job.number && r.team === job.team) { r.matched = job.matched; r.answered = job.answered; r.theme = job.theme; found = true; } });
+          if (!found) rows.push({ number: job.number, theme: job.theme, team: job.team, matched: job.matched, answered: job.answered });
+          k++;
+          next();
+        },
+        onErr: function () { el.disabled = false; }
+      });
+    };
+    next();
+  };
+
+  // ================================================================
+  // 名簿タブ
+  // ================================================================
+  function renderRoster() {
+    var ps = S.ov.participants || [];
+    var h = '';
+    var arrived = ps.filter(function (p) { return p.arrivedAt; }).length;
+    var intro = ps.filter(function (p) { return p.introDone; }).length;
+    h += '<div class="card"><div class="stat-grid">' +
+      '<div><div class="n">' + ps.length + '</div><div class="l">名簿</div></div>' +
+      '<div><div class="n">' + arrived + '</div><div class="l">来場</div></div>' +
+      '<div><div class="n">' + intro + '</div><div class="l">自己紹介 入力済み</div></div></div>';
+    h += '<table class="bd" style="margin-top:10px"><thead><tr><th>チーム</th><th>人数</th><th>来場</th><th>自己紹介</th><th>クイズ除外</th></tr></thead><tbody>';
+    TEAMS.forEach(function (t) {
+      var tp = ps.filter(function (p) { return p.team === t; });
+      h += '<tr><td>' + teamChip(t) + '</td><td>' + tp.length + '</td><td>' + tp.filter(function (p) { return p.arrivedAt; }).length +
+        '</td><td>' + tp.filter(function (p) { return p.introDone; }).length + '</td><td>' + tp.filter(function (p) { return !p.quizInclude; }).length + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+
+    // 名簿の読み込み
+    h += '<div class="card"><h2>📥 名簿の読み込み</h2>';
+    h += '<p class="sub" style="margin:0 0 8px">名簿ファイルの「チーム」列が入っている人を追加します。何度押しても大丈夫(すでにいる人のチームは変えません)。</p>';
+    h += '<button class="btn block accent" data-act="import">名簿を読み込む</button>';
+    h += '<button class="link-btn" data-act="importOverwrite">名簿のチームで上書きして読み込む…</button>';
+    if (S.lastImport) {
+      var r = S.lastImport;
+      h += '<div class="note">新しく追加 ' + r.added + '人・チームを上書き ' + r.teamUpdated + '人・チームが入っている人 ' + r.totalWithTeam + '人';
+      if (r.teamDiffs && r.teamDiffs.length) {
+        h += '<br>名簿とアプリでチームが違う人(上書きしていません):<br>' + r.teamDiffs.map(function (x) {
+          var p = personById(x.id);
+          return esc(p ? p.name : x.id) + ' アプリ ' + esc(x.appTeam) + ' / 名簿 ' + esc(x.rosterTeam);
+        }).join('<br>');
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+
+    // 当日追加
+    h += '<div class="card">' + det('walkin') + '<summary style="font-size:16px;font-weight:700;color:var(--ink)">➕ 当日来た人を追加</summary>';
+    h += '<label class="f">フルネーム(漢字)※名字と名前の間にスペース</label><input class="t" id="wName" placeholder="例:会津 太郎" autocomplete="off">';
+    h += '<label class="f">フルネーム(ひらがな)</label><input class="t" id="wKana" placeholder="例:あいづ たろう" autocomplete="off">';
+    h += '<label class="f">チーム</label><div class="seg c4">';
+    TEAMS.forEach(function (t) { h += '<button class="team-btn bg' + t + (S.walkTeam === t ? ' on' : '') + '" data-act="walkTeam" data-v="' + t + '">' + TEAM_MARK[t] + ' ' + t + '</button>'; });
+    h += '</div>';
+    h += '<label class="f">出身地(任意)</label><input class="t" id="wOrigin" list="prefList" placeholder="例:福島県" autocomplete="off">';
+    h += '<datalist id="prefList">' + PREFS.map(function (p) { return '<option value="' + p + '">'; }).join('') + '</datalist>';
+    h += '<div style="height:10px"></div><button class="btn block accent" data-act="walkAdd">追加する(来場済みになります)</button>';
+    h += '</details></div>';
+
+    // 一覧
+    h += '<div class="card"><h2>👥 参加者</h2>';
+    h += '<input class="t" type="search" data-in="rosterQ" placeholder="名前・ひらがなで探す" value="' + esc(S.rosterQuery) + '">';
+    h += '<div class="chips" style="margin:8px 0">';
+    [['all', '全員'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D'], ['notArrived', '未来場'], ['noIntro', '自己紹介まだ']].forEach(function (f) {
+      h += '<button class="chip' + (S.rosterFilter === f[0] ? ' on' : '') + '" data-act="rosterFilter" data-v="' + f[0] + '">' + (TEAM_MARK[f[0]] ? TEAM_MARK[f[0]] + ' ' : '') + f[1] + '</button>';
+    });
+    h += '</div><div id="rosterList">' + rosterListHtml() + '</div></div>';
+    $('tab-roster').innerHTML = h;
+  }
+  function rosterListHtml() {
+    var ps = S.ov.participants || [];
+    var q = S.rosterQuery.replace(/[\s　]/g, '');
+    var list = ps.filter(function (p) {
+      if (S.rosterFilter === 'notArrived' && p.arrivedAt) return false;
+      if (S.rosterFilter === 'noIntro' && p.introDone) return false;
+      if (TEAMS.indexOf(S.rosterFilter) >= 0 && p.team !== S.rosterFilter) return false;
+      if (q && (p.name + p.kana + p.id).replace(/[\s　]/g, '').indexOf(q) < 0) return false;
+      return true;
+    });
+    if (!list.length) return '<p class="sub">いません</p>';
+    var quizStarted = !!S.ov.state.quizStartedAt;
+    return list.map(function (p) {
+      var h = '<div class="person" data-act="openPerson" data-id="' + esc(p.id) + '">' + teamChip(p.team) +
+        '<div class="grow"><div class="nm">' + esc(p.name || p.id) + '</div><div class="kn">' + esc(p.kana) + '・' + esc(p.id) + '</div></div><div class="flags">' +
+        '<span class="flag ' + (p.arrivedAt ? 'on' : '') + '">' + (p.arrivedAt ? '来場 ' + clock(p.arrivedAt) : '未来場') + '</span>' +
+        '<span class="flag ' + (p.introDone ? 'on' : '') + '">' + (p.introDone ? '自己紹介✓' : '自己紹介まだ') + '</span>' +
+        (p.quizAnswered ? '<span class="flag on">クイズ✓</span>' : '') +
+        (!p.quizInclude ? '<span class="flag off">クイズ除外</span>' : '') +
+        (p.walkIn ? '<span class="flag">当日</span>' : '') + '</div></div>';
+      if (S.openPerson === p.id) {
+        h += '<div class="person-edit">';
+        h += '<label class="f" style="margin-top:0">チームを変える</label><div class="seg c4">';
+        TEAMS.forEach(function (t) {
+          h += '<button class="team-btn bg' + t + (p.team === t ? ' on' : '') + '" data-act="changeTeam" data-id="' + esc(p.id) + '" data-v="' + t + '">' + TEAM_MARK[t] + ' ' + t + '</button>';
+        });
+        h += '</div>';
+        if (quizStarted) h += '<p class="sub" style="margin:4px 0 0">クイズ開始のあとにチームを変えたら、クイズタブの「問題を作り直して開始」を使ってください。</p>';
+        h += '<div class="row" style="margin-top:10px">';
+        h += p.arrivedAt
+          ? '<button class="btn ghost grow" data-act="arrive" data-id="' + esc(p.id) + '" data-v="0">来場を取り消す</button>'
+          : '<button class="btn accent grow" data-act="arrive" data-id="' + esc(p.id) + '" data-v="1">来場にする</button>';
+        h += '</div>';
+        h += '<label class="switch" style="margin-top:10px"><input type="checkbox" data-chg="quizInclude" data-id="' + esc(p.id) + '"' + (p.quizInclude ? ' checked' : '') + '> クイズの計算に含める</label>';
+        h += '<p class="sub" style="margin:4px 0 0">途中参加などでチームの平均から外すときはオフに。</p>';
+        h += '</div>';
+      }
+      return h;
+    }).join('');
+  }
+  function refreshRosterList() { var el = $('rosterList'); if (el) el.innerHTML = rosterListHtml(); }
+  INPUTS.rosterQ = function (el) { S.rosterQuery = el.value; refreshRosterList(); };
+  ACTIONS.rosterFilter = function (el) { S.rosterFilter = el.getAttribute('data-v'); renderRoster(); };
+  ACTIONS.openPerson = function (el) {
+    var id = el.getAttribute('data-id');
+    S.openPerson = S.openPerson === id ? null : id;
+    refreshRosterList();
+  };
+  function updatePerson(id, fn) {
+    var p = personById(id);
+    if (p) fn(p);
+  }
+  ACTIONS.changeTeam = function (el) {
+    var id = el.getAttribute('data-id'), t = el.getAttribute('data-v');
+    var p = personById(id);
+    if (!p || p.team === t) return;
+    api('adminChangeTeam', [id, t], {
+      save: true, ok: (p.name || id) + ' を チーム' + t + ' にしました', btn: el,
+      onOk: function () { updatePerson(id, function (x) { x.team = t; }); S.scores = null; renderRoster(); }
+    });
+  };
+  ACTIONS.arrive = function (el) {
+    var id = el.getAttribute('data-id'), on = el.getAttribute('data-v') === '1';
+    api('adminSetArrived', [id, on], {
+      save: true, ok: on ? '来場にしました' : '来場を取り消しました', btn: el,
+      onOk: function () { updatePerson(id, function (x) { x.arrivedAt = on ? now() : null; }); renderRoster(); }
+    });
+  };
+  CHANGES.quizInclude = function (el) {
+    var id = el.getAttribute('data-id'), on = el.checked;
+    el.disabled = true;
+    api('adminSetQuizInclude', [id, on], {
+      save: true, ok: on ? 'クイズの計算に含めます' : 'クイズの計算から外しました',
+      onOk: function () { updatePerson(id, function (x) { x.quizInclude = on; }); S.scores = null; renderRoster(); },
+      onErr: function () { el.disabled = false; el.checked = !on; }
+    });
+  };
+  function doImport(overwrite, btn) {
+    api('adminImportRoster', overwrite ? [{ overwriteTeams: true }] : [], {
+      save: '読み込み中…', btn: btn,
+      onOk: function (r) {
+        S.lastImport = r;
+        showStatus('ok', '読み込みました(新しく ' + r.added + '人)');
+        loadOverview(function () { if (S.tab === 'roster') renderRoster(); });
+      }
+    });
+  }
+  ACTIONS.import = function (el) { doImport(false, el); };
+  ACTIONS.importOverwrite = function () {
+    confirmBox('名簿のチームで上書きしますか？', '当日にアプリで変えたチームも、名簿ファイルのチームに戻ります。', '上書きして読み込む', function () { doImport(true, null); }, true);
+  };
+  ACTIONS.walkTeam = function (el) {
+    S.walkTeam = el.getAttribute('data-v');
+    var bs = document.querySelectorAll('[data-act="walkTeam"]');
+    for (var i = 0; i < bs.length; i++) bs[i].className = 'team-btn bg' + bs[i].getAttribute('data-v') + (bs[i].getAttribute('data-v') === S.walkTeam ? ' on' : '');
+  };
+  ACTIONS.walkAdd = function (el) {
+    var name = $('wName').value.trim(), kana = $('wKana').value.trim(), origin = $('wOrigin').value.trim();
+    if (!name || !kana) { showStatus('err', '名前とひらがなを入れてください'); return; }
+    if (!/[\s　]/.test(name) || !/[\s　]/.test(kana)) { showStatus('err', '名字と名前の間にスペースを入れてください'); return; }
+    if (!S.walkTeam) { showStatus('err', 'チームを選んでください'); return; }
+    api('adminAddWalkIn', [{ name: name, kana: kana, team: S.walkTeam, origin: origin }], {
+      save: '追加中…', btn: el,
+      onOk: function (r) {
+        showStatus('ok', name + ' さんを チーム' + r.team + ' に追加しました(' + r.id + ')');
+        S.walkTeam = '';
+        loadOverview(function () { if (S.tab === 'roster') renderRoster(); });
+      }
+    });
+  };
+
+  // ============ はじめ ============
+  S.token = ssGet(TOKEN_KEY);
+  if (S.token) toApp();
+  else toLogin('');
+})();
+</script>

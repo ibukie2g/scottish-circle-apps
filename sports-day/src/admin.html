@@ -1,35 +1,54 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <base target="_top">
   <meta charset="utf-8">
-  <!-- 仮の運営画面(本番の画面は別に作る)。サーバーとのやりとりの確認用 -->
-  <style>
-    body { font-family: sans-serif; margin: 16px; }
-    input, button { font-size: 16px; padding: 8px; }
-    pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>運動会 運営</title>
+  <?!= include('admin_style') ?>
 </head>
 <body>
-  <h1>運営(仮の画面)</h1>
-  <input id="pw" type="password" placeholder="運営パスワード">
-  <button id="login">ログイン</button>
-  <button id="overview" disabled>一覧を取得</button>
-  <pre id="out"></pre>
-  <script>
-    var token = sessionStorage.getItem('adminToken') || '';
-    function show(res) { document.getElementById('out').textContent = JSON.stringify(res, null, 2); }
-    function enable() { document.getElementById('overview').disabled = !token; }
-    document.getElementById('login').onclick = function () {
-      google.script.run.withSuccessHandler(function (res) {
-        show(res);
-        if (res.ok) { token = res.data.token; sessionStorage.setItem('adminToken', token); enable(); }
-      }).adminLogin(document.getElementById('pw').value);
-    };
-    document.getElementById('overview').onclick = function () {
-      google.script.run.withSuccessHandler(show).adminGetOverview(token);
-    };
-    enable();
-  </script>
+  <!-- ログイン -->
+  <section id="login" class="login hidden">
+    <h1>🏅 合同運動会 運営</h1>
+    <p class="sub center">運営パスワードを入れてください</p>
+    <div class="card">
+      <form id="loginForm" autocomplete="off">
+        <label class="f" for="pw">運営パスワード</label>
+        <input id="pw" class="t" type="password" autocomplete="current-password" required>
+        <div style="height:12px"></div>
+        <button class="btn block big accent" type="submit" id="loginBtn">ログイン</button>
+      </form>
+      <p id="loginMsg" class="sub" style="color:var(--ng)"></p>
+    </div>
+  </section>
+
+  <!-- 運営画面 -->
+  <section id="app" class="hidden">
+    <header class="top">
+      <h1 id="topTitle">進行</h1>
+      <span class="mode-pill" id="modePill">-</span>
+      <button class="icon-btn" id="reloadBtn" title="最新にする" aria-label="最新にする">↻</button>
+    </header>
+    <main>
+      <div id="tab-progress" class="tab"><div class="card center sub">読み込み中…</div></div>
+      <div id="tab-matches" class="tab hidden"></div>
+      <div id="tab-scores" class="tab hidden"></div>
+      <div id="tab-quiz" class="tab hidden"></div>
+      <div id="tab-roster" class="tab hidden"></div>
+    </main>
+    <nav class="tabs" id="tabs">
+      <button data-tab="progress" class="on"><span class="ic">🚦</span>進行</button>
+      <button data-tab="matches"><span class="ic">🏀</span>試合</button>
+      <button data-tab="scores"><span class="ic">🏆</span>順位</button>
+      <button data-tab="quiz"><span class="ic">💡</span>クイズ<span class="dot hidden" id="nearDot"></span></button>
+      <button data-tab="roster"><span class="ic">📋</span>名簿</button>
+    </nav>
+  </section>
+
+  <div id="status" class="status hidden"><span class="msg"></span></div>
+  <div id="modal" class="modal-bg hidden"></div>
+
+  <?!= include('admin_script') ?>
 </body>
 </html>
