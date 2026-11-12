@@ -492,7 +492,10 @@ function adminSetArrived(token, participantId, arrived) {
 /** 集計(運動だけの順位と、仲良し込みの順位、内訳)。集計シートも書き直す */
 function adminGetScores(token) {
   return adminApi_(token, function () {
-    var r = withLock_(function () { return refreshSummary_(); });
+    // 順位タブは開くたびに呼ばれるので、ロックを取らず、キャッシュ(10秒)から計算する。
+    // 運営の書き込み(試合の確定など)のたびにキャッシュは消え、集計シートもそのとき書き直している
+    var r = buildScores_(false);
+    writeSummary_(r); // 集計シートも最新にする(運営の端末からだけ呼ばれるので、ロックなしで書く)
     var bySports = r.teams.slice().sort(function (a, b) { return a.sportsRank - b.sportsRank || (a.team < b.team ? -1 : 1); });
     var byTotal = r.teams.slice().sort(function (a, b) { return a.totalRank - b.totalRank || (a.team < b.team ? -1 : 1); });
     return {
