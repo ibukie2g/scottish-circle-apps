@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>サクラ</title>
+<style>
+body{font-family:sans-serif;margin:16px;font-size:14px;background:#faf6ec;color:#333}
+h3{margin:0 0 8px}
+.card{background:#fff;border-radius:12px;padding:12px;margin:8px 0}
+button{font-size:15px;padding:8px 14px;margin:4px 4px 4px 0;border-radius:20px;border:1px solid #bbb;background:#fff}
+button.on{background:#c96a3b;color:#fff;border-color:#c96a3b}
+input{font-size:14px;padding:4px;width:12em}
+table{border-collapse:collapse;font-size:13px}
+td,th{border-bottom:1px solid #eee;padding:2px 8px;text-align:left}
+#log{white-space:pre-wrap;font-size:12px;max-height:40vh;overflow:auto;background:#f4f4f4;padding:8px;border-radius:8px}
+.muted{color:#888;font-size:12px}
+</style>
+</head>
+<body>
+<!--
+  デモ用の「サクラ」(自動で動く参加者)。テスト用の名簿で使う。
+  スクリプト プロパティ DEMO_BOTS が on のときだけ開ける(?page=bots)。本番の前に必ず消すか off にする。
+  運営画面の操作(モードの切り替え・試合の確定・クイズ開始・結果公開)に合わせて、サクラが自動で動く。
+-->
+<h3>サクラ(自動参加者)</h3>
+<div class="card">
+  <div>サクラにしない人(自分で操作する人)のID:<input id="skip" value="P01"> <span class="muted">カンマ区切りで複数</span></div>
+  <div style="margin-top:6px">
+    <button id="startBtn" onclick="startBots()">▶ サクラを動かす</button>
+    <button onclick="stopBots()">■ 止める</button>
+  </div>
+  <div class="muted">このページを開いたままにしておく(閉じるとサクラも止まる)。モードは4秒ごとに見る。</div>
+</div>
+<div class="card">
+  <div>いまのモード:<b id="mode">−</b>(<span id="detail"></span>)</div>
+  <table id="tbl"><thead><tr><th>状態</th><th>人数</th></tr></thead><tbody></tbody></table>
+</div>
+<div id="log">待機中</div>
+
+<script>
+var RUN = false, BOTS = [], TEAMS = ['A', 'B', 'C', 'D'], ROSTER = {}; // ROSTER: team → [{id,name,kana}]
+var SPORTS = ['バスケ', 'バレー', 'バドミントン', 'その他', '特になし'];
+var COMMENTS = ['ラーメンが好き', '最近ランニング始めた', '猫を飼ってます', 'カフェ巡りが趣味', 'ゲームが好き', '朝が弱い',
+  '辛いもの好き', '映画をよく見る', 'サウナにはまってる', '料理を練習中', '旅行が好き', '甘いもの大好き', '音楽を聴くのが好き', '筋トレ中'];
+var SNS = ['顔OK', '顔を隠せばOK', '載せない'];
+var state = null, lastMode = '', pollTimer = null;
+
+function $(id) { return document.getElementById(id); }
+function rand(a, b) { return a + Math.random() * (b - a); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function log(s) {
+  var el = $('log');
+  el.textContent = new Date().toLocaleTimeString() + ' ' + s + '\n' + (el.textContent === '待機中' ? '' : el.textContent);
+}
+function call(name, args) {
+  return new Promise(function (resolve) {
+    var r = google.script.run
+      .withSuccessHandler(function (res) { resolve(res || { ok: false, error: { code: 'EMPTY' } }); })
+      .withFailureHandler(function (e) { resolve({ ok: false, error: { code: 'NETWORK', message: String(e && e.message || e) } }); });
+    r[name].apply(r, args || []);
+  });
+}
+function later(ms, fn) { setTimeout(function () { if (RUN) fn(); }, ms); }
+
+// ---- サクラ1人分 ----
+function Bot(id) {
+  this.id = id; this.team = ''; this.name = ''; this.status = '待機';
+  this.predicted = {}; this.quizKey = ''; this.surveyDone = false; this.busy = false;
+}
+Bot.prototype.set = function (s) { this.status = s; renderTable(); };
+
+Bot.prototype.arrive = function () {
+  var b = this;
+  later(rand(0, 15000), function () {
+    call('selectSelf', [b.id]).then(function (r) {
+      if (!r.ok) { b.set('名前選び失敗'); log(b.id + ' 名前選び失敗 ' + r.error.code); return; }
+      b.team = r.data.team; b.name = r.data.name; b.set('来場');
+      if (Math.random() < 0.85) later(rand(3000, 25000), function () { b.intro(); });
+    });
+  });
+};
+Bot.prototype.intro = function () {
+  var b = this, sports = [pick(SPORTS.slice(0, 4))];
+  if (Math.random() < 0.3) sports.push(pick(SPORTS.slice(0, 4)));
+  if (Math.random() < 0.15) sports = ['特になし'];
+  call('saveIntro', [b.id, { sports: sports, comment: pick(COMMENTS), nickname: Math.random() < 0.3 ? b.name.split(' ')[1] || '' : '', snsConsent: pick(SNS) }])
+    .then(function (r) { b.set(r.ok ? '自己紹介ずみ' : '自己紹介失敗'); if (!r.ok) log(b.id + ' 自己紹介失敗 ' + r.error.code); });
+};
+Bot.prototype.predict = function (m) {
+  var b = this;
+  if (!b.team || b.predicted[m.id] || b.team === m.team1 || b.team === m.team2) return;
+  b.predicted[m.id] = 'pending';
+  later(rand(2000, 40000), function () {
+    var choice = Math.random() < 0.55 ? m.team1 : m.team2;
+    call('submitPrediction', [b.id, m.id, choice]).then(function (r) {
+      if (r.ok) { b.predicted[m.id] = choice; b.set('予想:' + choice); }
+      else { b.predicted[m.id] = ''; b.set('予想できず'); log(b.id + ' 予想できず ' + r.error.code); }
+    });
+  });
+};
+Bot.prototype.quiz = function (q) {
+  var b = this;
+  if (!b.team || b.quizKey === String(q.startedAt)) return;
+  b.quizKey = String(q.startedAt);
+  later(rand(0, 5000), function () {
+    call('startQuiz', [b.id]).then(function (r) {
+      if (!r.ok) { b.set('クイズ開けず'); log(b.id + ' クイズ開けず ' + r.error.code); return; }
+      if (r.data.alreadyAnswered) { b.set('クイズ送信ずみ'); return; }
+      b.set('クイズ中');
+      var d = r.data, mates = (ROSTER[b.team] || []).filter(function (p) { return p.id !== b.id; });
+      // 覚えている人数はばらばら。ひらがな・漢字を混ぜ、たまに1文字まちがえる(惜しい答え)
+      var know = Math.round(d.names.count * rand(0.2, 1));
+      var names = mates.slice().sort(function () { return Math.random() - 0.5; }).slice(0, know).map(function (p) {
+        var s = Math.random() < 0.5 ? p.kana : p.name;
+        if (Math.random() < 0.12 && s.length > 3) s = s.slice(0, -1) + 'の';
+        return s;
+      });
+      var origin = d.origin ? pick(d.origin.choices) : '';
+      // 締め切りの少し前までのどこかで送る
+      var now = Date.now() + ((d.serverNow || Date.now()) - Date.now());
+      var until = d.timing ? Math.max(3000, d.timing.nameEndsAt - now - 3000) : 30000;
+      later(rand(Math.min(10000, until), until), function () {
+        call('submitQuiz', [b.id, { names: names, origin: origin }]).then(function (r2) {
+          if (r2.ok) b.set('クイズ送信:' + r2.data.correctCount + '/' + r2.data.total);
+          else { b.set('クイズ送信失敗'); log(b.id + ' クイズ送信失敗 ' + r2.error.code); }
+        });
+      });
+    });
+  });
+};
+Bot.prototype.survey = function () {
+  var b = this;
+  if (b.surveyDone || !b.team) return;
+  b.surveyDone = true;
+  later(rand(5000, 60000), function () {
+    var fun = pick([3, 4, 4, 5, 5, 5]), talked = pick([2, 3, 3, 4, 4, 5]);
+    call('submitSurvey', [{ fun: fun, talked: talked, again: Math.random() < 0.85 ? 'はい' : 'いいえ', comment: Math.random() < 0.3 ? pick(['楽しかった!', 'またやりたい', 'クイズが難しかった', '']) : '' }, b.id])
+      .then(function (r) { b.set(r.ok ? 'アンケートずみ' : 'アンケート失敗'); });
+  });
+};
+
+// ---- 全体 ----
+function renderTable() {
+  var counts = {};
+  BOTS.forEach(function (b) { counts[b.status] = (counts[b.status] || 0) + 1; });
+  var keys = Object.keys(counts).sort();
+  $('tbl').querySelector('tbody').innerHTML = keys.map(function (k) { return '<tr><td>' + k + '</td><td>' + counts[k] + '</td></tr>'; }).join('');
+}
+function poll() {
+  if (!RUN) return;
+  call('getState', []).then(function (r) {
+    if (r.ok) onState(r.data);
+    pollTimer = setTimeout(poll, 4000);
+  });
+}
+function onState(s) {
+  state = s;
+  $('mode').textContent = s.mode;
+  $('detail').textContent = s.mode === '予想' && s.prediction ? s.prediction.id + ' ' + s.prediction.team1 + '対' + s.prediction.team2 + '(' + s.prediction.predictionStatus + ')' : (s.currentEvent || '');
+  if (s.mode !== lastMode) { log('モード:' + s.mode); lastMode = s.mode; }
+  if (s.mode === '予想' && s.prediction && s.prediction.predictionStatus === '受付中') BOTS.forEach(function (b) { b.predict(s.prediction); });
+  if (s.mode === 'クイズ' && s.quiz) BOTS.forEach(function (b) { b.quiz(s.quiz); });
+  if (s.mode === '結果公開') BOTS.forEach(function (b) { b.survey(); });
+}
+function startBots() {
+  if (RUN) return;
+  RUN = true; $('startBtn').className = 'on';
+  var skip = $('skip').value.split(/[,、\s]+/).filter(Boolean).map(function (s) { return s.toUpperCase(); });
+  log('名簿を読み込み中…');
+  Promise.all(TEAMS.map(function (t) { return call('listTeamMembers', [t]); })).then(function (rs) {
+    var ids = [];
+    rs.forEach(function (r, i) {
+      if (!r.ok) { log(TEAMS[i] + 'チームの名簿が読めない ' + r.error.code + '(クイズ中は読めない)'); return; }
+      ROSTER[TEAMS[i]] = r.data.members;
+      r.data.members.forEach(function (p) { if (skip.indexOf(p.id) < 0) ids.push(p.id); });
+    });
+    BOTS = ids.map(function (id) { return new Bot(id); });
+    log('サクラ ' + BOTS.length + '人で開始(自分:' + skip.join(',') + ')');
+    renderTable();
+    BOTS.forEach(function (b) { b.arrive(); });
+    poll();
+  });
+}
+function stopBots() {
+  RUN = false; clearTimeout(pollTimer); $('startBtn').className = '';
+  log('止めました');
+}
+</script>
+</body>
+</html>

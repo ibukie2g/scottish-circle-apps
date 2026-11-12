@@ -5,6 +5,13 @@
  */
 function doGet(e) {
   var params = (e && e.parameter) || {};
+  if (params.page === 'bots') {
+    // デモ用のサクラ。スクリプト プロパティ DEMO_BOTS が on のときだけ(本番の名簿で動かさないため)
+    if (PropertiesService.getScriptProperties().getProperty('DEMO_BOTS') !== 'on') {
+      return HtmlService.createHtmlOutput('サクラは止めてあります(スクリプト プロパティ DEMO_BOTS が on ではありません)').setTitle('サクラ');
+    }
+    return HtmlService.createHtmlOutputFromFile('bots').setTitle('サクラ');
+  }
   var isAdmin = params.page === 'admin';
   var t = HtmlService.createTemplateFromFile(isAdmin ? 'admin' : 'participant');
   t.team = normTeam_(params.team); // A〜D 以外は ''
