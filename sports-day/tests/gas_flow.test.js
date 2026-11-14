@@ -39,6 +39,9 @@ function endNamePhase(env) {
   env.ctx.cache_().remove('tbl:状態');
 }
 
+// アンケートの答え(必須の項目がそろった形)
+const SURVEY = { fun:5, talked:4, learned:'1〜2人', best:'バレー', next:['ご飯'], help:'いいよ' };
+
 // google.script.run と同じように JSON にして受け取る(Date などは渡せない)
 function ok(res) {
   assert.equal(res.ok, true, JSON.stringify(res));
@@ -200,7 +203,7 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(ok(g.startQuiz('P01')).alreadyAnswered, true);
   assert.ok(!('result' in ok(g.startQuiz('P01'))));
   // アンケートを送っても、名前クイズの全員の締め切りまでは返さない(早く終わった人が答えを見られないように)
-  ok(g.submitSurvey({ fun: 5, talked: 4, again: 'はい' }, 'P01'));
+  ok(g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:4}), 'P01'));
   qr = ok(g.getQuizResult('P01'));
   assert.deepEqual([qr.surveyDone, qr.result, qr.availableAt], [true, null, st.quiz.nameEndsAt]);
   endNamePhase(env);
@@ -302,7 +305,7 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   res = ok(g.getQuizResult('P01')).result;
   assert.deepEqual([res.published, res.pendingCount, res.pendingOther], [true, 0, 0]);
   assert.equal(ok(g.getQuizResult('P03')).result, null); // アンケートを送っていない人には返さない
-  ok(g.submitSurvey({ fun: 4, talked: 4, again: 'はい' }, 'P03'));
+  ok(g.submitSurvey(Object.assign({}, SURVEY, {fun:4,talked:4}), 'P03'));
   assert.equal(ok(g.getQuizResult('P03')).result.correctCount, 0);
   ok(g.adminJudgeNearMiss(token2, p03near, '0.5人分')); // 不服の申し立てで直した
   assert.equal(ok(g.getQuizResult('P03')).result.correctCount, 1);
@@ -312,8 +315,8 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(ok(g.getState()).results.teams.find(t => t.team === 'A').quiz, 5.8);
 
   // アンケート(名前を選んでいない端末)
-  assert.equal(g.submitSurvey({ fun: 6, talked: 3, again: 'はい' }).error.code, 'INVALID');
-  ok(g.submitSurvey({ fun: 5, talked: 4, again: 'はい', comment: 'たのしかった' }));
+  assert.equal(g.submitSurvey(Object.assign({}, SURVEY, {fun:6,talked:3})).error.code, 'INVALID');
+  ok(g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:4,comment:'たのしかった'})));
   assert.equal(app.getSheetByName('アンケート').getLastRow(), 5); // P01(2行目)・P03(4行目)・名前なし(5行目)
 
   // 運営の操作

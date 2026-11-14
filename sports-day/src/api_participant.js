@@ -558,7 +558,11 @@ function getQuizResult(participantId) {
 /**
  * アンケート。回答は運営だけが見る(2026-11-11 決定:匿名にはしない。名前は保存せず、参加者IDだけ)
  * 30人が同時に送っても待たせないように、その人専用の行に書く(送り直したら上書き)
- * @param {{fun:number, talked:number, again:string, comment?:string}} survey again は 'はい' か 'いいえ'
+ * @param {{fun:number, talked:number, learned:string, best:string, next?:string[], nextOther?:string,
+ *          help:string, comment?:string, snsOk?:boolean}} survey
+ *   fun・talked は 1〜5、learned は SURVEY_LEARNED、best は SURVEY_BEST、help は SURVEY_HELP のどれか(ここまで必須)。
+ *   next は SURVEY_NEXT からいくつでも(0個でもよい)。nextOther は「その他」の中身(50字まで)。
+ *   comment はひとこと感想(任意)。snsOk は「SNSで紹介してもいい(名前は出しません)」のチェック
  * @param {string} [participantId] 名前を選んでいない端末からは来ない。そのときはロックを取って下に足す
  */
 function submitSurvey(survey, participantId) {
@@ -566,15 +570,25 @@ function submitSurvey(survey, participantId) {
     survey = survey || {};
     var fun = toNumOrNull_(survey.fun);
     var talked = toNumOrNull_(survey.talked);
-    var again = toStr_(survey.again);
-    var comment = toStr_(survey.comment).slice(0, 1000);
     [fun, talked].forEach(function (v) {
-      if (v === null || v < 1 || v > 5 || Math.floor(v) !== v) throw appError_('INVALID', '1〜5で選んでください');
+      if (v === null || v < 1 || v > 5 || Math.floor(v) !== v) throw appError_('INVALID', '1と2は、1〜5で選んでください');
     });
-    if (['はい', 'いいえ'].indexOf(again) < 0) throw appError_('INVALID', '「また参加したいか」を選んでください');
+    var learned = toStr_(survey.learned);
+    if (SURVEY_LEARNED.indexOf(learned) < 0) throw appError_('INVALID', '「新しく名前を覚えた人数」を選んでください');
+    var best = toStr_(survey.best);
+    if (SURVEY_BEST.indexOf(best) < 0) throw appError_('INVALID', '「一番楽しかった種目・企画」を選んでください');
+    var help = toStr_(survey.help);
+    if (SURVEY_HELP.indexOf(help) < 0) throw appError_('INVALID', '「準備の手伝い」を選んでください');
+    var picked = (Array.isArray(survey.next) ? survey.next : []).map(toStr_);
+    var next = SURVEY_NEXT.filter(function (x) { return picked.indexOf(x) >= 0; }); // 選択肢の順に並べ、重複と知らない値を除く
+    var nextOther = next.indexOf('その他') >= 0 ? Array.from(toStr_(survey.nextOther)).slice(0, SURVEY_NEXT_OTHER_MAX).join('') : '';
+    var comment = toStr_(survey.comment).slice(0, 1000);
     var row = {
       '送信時刻': new Date(), '楽しかったか(1〜5)': fun, '普段話さない人と話せたか(1〜5)': talked,
-      'また参加したいか': again, '自由記述': comment
+      'また参加したいか': '', '自由記述': comment,
+      '新しく名前を覚えた人数': learned, '一番楽しかった種目・企画': best,
+      '次にやってほしいイベント': next.join('、'), '次にやってほしいイベント(その他)': nextOther,
+      '準備の手伝い': help, '感想をSNSで紹介してよい': comment && toBool_(survey.snsOk) ? '○' : ''
     };
     var pid = toStr_(participantId);
     var me = pid ? findParticipant_(readParticipants_(), pid) : null;

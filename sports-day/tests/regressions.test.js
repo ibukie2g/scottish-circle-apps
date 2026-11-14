@@ -6,12 +6,13 @@ function world() {
  e.roster.insertSheet('フォームの回答 1').data=[['フルネーム(漢字)','フルネーム(ひらがな)','出身地(都道府県)','チーム'], ...['一','二','三'].map((x,i)=>['架空 '+x,'かくう '+x,['福島県','宮城県','山形県'][i],'C'])];
  g.setup(); e.token=g.adminLogin('pw').data.token; g.adminImportRoster(e.token); return e;
 }
+const SURVEY={fun:5,talked:4,learned:'1〜2人',best:'バレー',next:['ご飯'],help:'いいよ'}; // アンケートの答え(必須の項目がそろった形)
 const J=x=>JSON.parse(JSON.stringify(x)); // vm の中で作ったオブジェクトを、比べられる形にする
 function match(e,id) { return e.ctx.adminGetMatches(e.token).data.matches.find(m=>m.id===id); }
 // 名前クイズの全員の締め切りを過ぎたことにする(クイズ開始時刻を10分前にする)
 function endNamePhase(e) { e.app.getSheetByName('状態').data.find(r=>r[0]==='クイズ開始時刻')[1]=new Date(Date.now()-600000); e.ctx.cache_().remove('tbl:状態'); }
 // アンケートを送って、自分の答え合わせを受け取る
-function myResult(e,pid) { const g=e.ctx; g.submitSurvey({fun:5,talked:5,again:'はい'},pid); endNamePhase(e); return g.getQuizResult(pid).data.result; }
+function myResult(e,pid) { const g=e.ctx; g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:5}),pid); endNamePhase(e); return g.getQuizResult(pid).data.result; }
 test('出身地と任意入力をシートに残さない・6時間で問題失効',()=>{
  const e=world(),g=e.ctx; g.adminStartQuiz(e.token);g.startQuiz('P01');
  assert.equal(g.submitQuiz('P01',{names:[],origin:'秘密の文字列'}).ok,true);
@@ -167,11 +168,12 @@ test('自分専用の行にほかの人のデータがあれば、上書きせ�
 });
 test('アンケートは自分専用の行に書き、名前を選んでいない端末の回答は上書きしない',()=>{
  const e=world(),g=e.ctx,sh=e.app.getSheetByName('アンケート');
- assert.equal(g.submitSurvey({fun:5,talked:4,again:'はい'},'P02').ok,true);
+ assert.equal(g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:4}),'P02').ok,true);
  const h=sh.data[0];assert.equal(sh.data[2][h.indexOf('参加者ID')],'P02'); // P02 は3行目
- assert.equal(g.submitSurvey({fun:3,talked:3,again:'いいえ'},'').ok,true); // 名前なし → 下に足す(4行目)
- assert.equal(g.submitSurvey({fun:4,talked:4,again:'はい'},'P03').ok,true); // P03 の行(4行目)は使われているので下に足す
- assert.equal(sh.data[3][h.indexOf('また参加したいか')],'いいえ');
+ assert.equal(g.submitSurvey(Object.assign({}, SURVEY, {fun:3,talked:3}),'').ok,true); // 名前なし → 下に足す(4行目)
+ assert.equal(g.submitSurvey(Object.assign({}, SURVEY, {fun:4,talked:4}),'P03').ok,true); // P03 の行(4行目)は使われているので下に足す
+ assert.equal(sh.data[3][h.indexOf('楽しかったか(1〜5)')],3); // 名前なしの回答が残っている
+ assert.equal(sh.data[3][h.indexOf('また参加したいか')],''); // 「また参加したいか」はやめた(列は残す)
  assert.equal(sh.getLastRow(),5);
 });
 test('resetEventData:当日のデータとキャッシュの目印を消し、参加者とチーム分けは残す',()=>{
@@ -179,7 +181,7 @@ test('resetEventData:当日のデータとキャッシュの目印を消し、�
  g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
  g.selectSelf('P01');g.saveIntro('P01',{sports:['バスケ'],comment:'よろしく',snsConsent:'載せない'});
  g.adminStartQuiz(e.token);g.startQuiz('P01');g.submitQuiz('P01',{names:[],origin:''});
- g.submitSurvey({fun:5,talked:5,again:'はい'},'P01');
+ g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:5}),'P01');
  g.resetEventData();
  for(const n of ['予想','予想公開','クイズ問題','クイズ回答','惜しい答え','お題カード','アンケート'])assert.equal(e.app.getSheetByName(n).getLastRow(),1,n);
  assert.equal(e.roster.getSheetByName('自己紹介').getLastRow(),1);
@@ -210,14 +212,14 @@ test('答え合わせ:アンケートを送るまで返さない。送ってい�
  assert.equal(g.selectSelf('P01').data.surveyDone,false);
  assert.deepEqual(J(g.submitQuiz('P01',{names:['架空 二'],origin:''}).data),{accepted:true,surveyDone:false});
  let r=g.getQuizResult('P01').data;assert.deepEqual([r.answered,r.surveyDone,r.result],[true,false,null]);
- g.submitSurvey({fun:5,talked:5,again:'はい'},'P01');
+ g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:5}),'P01');
  assert.equal(g.selectSelf('P01').data.surveyDone,true); // 端末ではなく参加者ごと
  assert.equal(g.selectSelf('P02').data.surveyDone,false);
  r=g.getQuizResult('P01').data;assert.equal(r.result,null);assert.equal(typeof r.availableAt,'number');
  const dump=JSON.stringify(r);assert.ok(!dump.includes('架空'));
  endNamePhase(e);r=g.getQuizResult('P01').data;assert.equal(r.availableAt,null);assert.equal(r.result.correctCount,1);
  // クイズに答えていない人は、アンケートを送っても結果はない
- g.submitSurvey({fun:5,talked:5,again:'はい'},'P02');r=g.getQuizResult('P02').data;assert.deepEqual([r.answered,r.surveyDone,r.result],[false,true,null]);
+ g.submitSurvey(Object.assign({}, SURVEY, {fun:5,talked:5}),'P02');r=g.getQuizResult('P02').data;assert.deepEqual([r.answered,r.surveyDone,r.result],[false,true,null]);
  // 結果待ちに進んだあとは、すぐ返す
  g.adminSetState(e.token,{mode:'結果待ち'});assert.equal(g.getQuizResult('P01').data.result.total,2);
 });
@@ -291,4 +293,20 @@ test('前の形のシート(出身地の正誤が TRUE/FALSE)も集計できる'
  assert.equal(q.A.originRate,2/6);assert.equal(q.A.originPoints,1);assert.equal(q.A.namePoints,7); // 平均 (1.2+0.8)/2 = 1.0 → 7点
  assert.equal(q.A.points,8);
  assert.equal(q.B.originRate,0.5);assert.equal(q.B.points,5);
+});
+test('アンケート:新しい7項目を、列を右に足して保存する',()=>{
+ const e=world(),g=e.ctx,sh=e.app.getSheetByName('アンケート'),h=sh.data[0];
+ assert.deepEqual(J(h.slice(0,6)),['送信時刻','楽しかったか(1〜5)','普段話さない人と話せたか(1〜5)','また参加したいか','自由記述','参加者ID']); // 前からある列の順番は変えない
+ const full={fun:5,talked:4,learned:'3〜5人',best:'お題カード',next:['その他','ご飯','ご飯','知らない値'],nextOther:'ボウリング',help:'内容による',comment:'=楽しかった',snsOk:true};
+ assert.equal(g.submitSurvey(full,'P01').ok,true);
+ const row=sh.data[1],v=k=>row[h.indexOf(k)];
+ assert.deepEqual([v('楽しかったか(1〜5)'),v('普段話さない人と話せたか(1〜5)'),v('新しく名前を覚えた人数'),v('一番楽しかった種目・企画'),v('次にやってほしいイベント'),v('次にやってほしいイベント(その他)'),v('準備の手伝い'),v('自由記述'),v('感想をSNSで紹介してよい'),v('参加者ID'),v('また参加したいか')],
+  [5,4,'3〜5人','お題カード','ご飯、その他','ボウリング','内容による','=楽しかった','○','P01','']);
+ // 必須:1〜4 と 6。5(次のイベント)は0個でもよい、7(感想)は任意
+ for(const k of ['fun','talked','learned','best','help']){const x=Object.assign({},full);delete x[k];assert.equal(g.submitSurvey(x,'P02').error.code,'INVALID',k);}
+ assert.equal(g.submitSurvey(Object.assign({},full,{best:'カバディ'}),'P02').error.code,'INVALID');
+ assert.equal(g.submitSurvey({fun:3,talked:3,learned:'0人',best:'クイズ',help:'今回はパス',snsOk:true,nextOther:'その他を選んでいない'},'P02').ok,true);
+ const r2=sh.data[2];
+ assert.deepEqual([r2[h.indexOf('次にやってほしいイベント')],r2[h.indexOf('次にやってほしいイベント(その他)')],r2[h.indexOf('感想をSNSで紹介してよい')]],['','','']); // 感想がなければSNSの○は付けない
+ assert.equal(g.selectSelf('P02').data.surveyDone,true);
 });

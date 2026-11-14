@@ -124,10 +124,11 @@
     predEpoch: 0,                  // 予想を押すたびに増やす(古い取得の返事を捨てるため)
     quiz: null,                    // { key, phase, data, names, origin, result, err, needRestart }
     review: null,                  // { loading, err, answered, surveyDone, availableAt, result }
-    survey: { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false },   // freshSurvey() と同じ形
+    survey: null,                  // アンケートの入力内容(freshSurvey の形)
     lastView: '', lastHtml: '', banner: ''
   };
   if (S.me && S.me.id !== S.pid) S.me = null;
+  S.survey = freshSurvey();
 
   /* アンケートを送ったか。端末ではなく参加者ごとに持つ(端末を貸しても、次の人は未回答のまま) */
   function surveyDone() { return !!store.get(S.pid ? 'sv.' + S.pid : 'surveyDone'); }
@@ -136,7 +137,14 @@
     if (done) store.set('sv.' + S.pid, true); else store.del('sv.' + S.pid);
   }
   function quizAnswered() { return !!(S.pid && store.get('qdone.' + S.pid)); }
-  function freshSurvey() { return { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false }; }
+  function freshSurvey() {
+    return { fun: 0, talked: 0, learned: '', best: '', next: [], nextOther: '', help: '', comment: '', snsOk: false, err: '', sending: false };
+  }
+  /* アンケートの選択肢(サーバーの setup.js の SURVEY_* と同じ) */
+  var SURVEY_LEARNED = ['0人', '1〜2人', '3〜5人', '6人以上'];
+  var SURVEY_BEST = ['バスケ', 'バド', 'ドッジ', 'バレー', 'クイズ', 'お題カード', '予想'];
+  var SURVEY_NEXT = ['クリスマス会', 'ご飯', '雪遊び', 'ミックスチーム大会', 'その他'];
+  var SURVEY_HELP = ['いいよ', '内容による', '今回はパス'];
   function serverNow() { return Date.now() + S.offset; }
   function mode() { return S.state ? S.state.mode : ''; }
 
@@ -977,28 +985,46 @@
       for (var i = 1; i <= 5; i++) x += '<button type="button" class="' + (s[key] === i ? 'on' : '') + '" data-act="survey" data-k="' + key + '" data-v="' + i + '">' + i + '</button>';
       return x + '</div><div class="scale-lbl"><span>' + lo + '</span><span>' + hi + '</span></div>';
     }
+    /* 1つ選ぶ(multi なら、いくつでも選べる) */
+    function picks(key, list, multi) {
+      var x = '<div class="picks">';
+      list.forEach(function (v) {
+        var on = multi ? s[key].indexOf(v) >= 0 : s[key] === v;
+        x += '<button type="button" class="' + (on ? 'on' : '') + '" data-act="' + (multi ? 'surveyMulti' : 'surveyPick') + '" data-k="' + key + '" data-v="' + esc(v) + '">' + esc(v) + '</button>';
+      });
+      return x + '</div>';
+    }
     h += '<div class="card">';
-    h += '<div class="field" style="margin-top:4px"><div class="lbl">1. 今日は楽しかったですか？</div>' + scale('fun', 'ぜんぜん', 'とても') + '</div>';
-    h += '<div class="field"><div class="lbl">2. 普段あまり話さない人と話せましたか？</div>' + scale('talked', 'ぜんぜん', 'たくさん') + '</div>';
-    h += '<div class="field"><div class="lbl">3. またこういうイベントがあったら参加したいですか？</div><div class="yn">' +
-      ['はい', 'いいえ'].map(function (v) {
-        return '<button type="button" class="' + (s.again === v ? 'on' : '') + '" data-act="survey" data-k="again" data-v="' + v + '">' + v + '</button>';
-      }).join('') + '</div></div>';
-    h += '<div class="field"><div class="lbl">4. 感想・次にやってほしいこと <small>(任意)</small></div>' +
-      '<textarea class="textarea" data-in="surveyComment" maxlength="1000" placeholder="なんでもどうぞ!">' + esc(s.comment) + '</textarea></div>';
+    h += '<div class="field" style="margin-top:4px"><div class="lbl">1. 楽しかった?</div>' + scale('fun', 'ぜんぜん', 'とても') + '</div>';
+    h += '<div class="field"><div class="lbl">2. 普段話さない人と話せた?</div>' + scale('talked', 'ぜんぜん', 'たくさん') + '</div>';
+    h += '<div class="field"><div class="lbl">3. 今日、新しく名前を覚えた人数</div>' + picks('learned', SURVEY_LEARNED) + '</div>';
+    h += '<div class="field"><div class="lbl">4. 一番楽しかった種目・企画</div>' + picks('best', SURVEY_BEST) + '</div>';
+    h += '<div class="field"><div class="lbl">5. 次にやってほしいイベント <small>(いくつでも)</small></div>' + picks('next', SURVEY_NEXT, true) +
+      (s.next.indexOf('その他') >= 0
+        ? '<input class="input" style="margin-top:8px" type="text" data-in="surveyNextOther" maxlength="50" value="' + esc(s.nextOther) + '" placeholder="例)ボウリング" autocomplete="off">' : '') + '</div>';
+    h += '<div class="field"><div class="lbl">6. 次のイベントの準備、ちょっと手伝ってもいい?</div>' + picks('help', SURVEY_HELP) + '</div>';
+    h += '<div class="field"><div class="lbl">7. ひとこと感想 <small>(任意)</small></div>' +
+      '<textarea class="textarea" data-in="surveyComment" maxlength="1000" placeholder="なんでもどうぞ!">' + esc(s.comment) + '</textarea>' +
+      '<button type="button" class="check' + (s.snsOk ? ' on' : '') + '" data-act="surveySns"><span class="box"></span>SNSで紹介してもいい(名前は出しません)</button></div>';
     h += '<div id="surveyErr" class="err">' + esc(s.err) + '</div>';
     h += '<button type="button" class="btn" data-act="sendSurvey"' + (s.sending ? ' disabled' : '') + '>' + (s.sending ? '送信中…' : '送信する') + '</button>';
-    h += '<p class="muted small center" style="margin:0">回答は運営だけが見ます。送ると、クイズの自分の結果が見られるよ</p></div>';
+    h += '<p class="muted small center" style="margin:0">回答は運営だけが見ます。' + (S.pid ? '送ると、クイズの自分の結果が見られるよ' : '') + '</p></div>';
     h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
     return h;
   };
   function sendSurvey() {
     var s = S.survey;
     if (s.sending) return;
-    if (!s.fun || !s.talked || !s.again) { s.err = '1〜3に答えてね'; render(true); return; }
+    var miss = !s.fun ? '1' : !s.talked ? '2' : !s.learned ? '3' : !s.best ? '4' : !s.help ? '6' : '';
+    if (miss) { s.err = miss + ' に答えてね'; render(true); return; }
     s.sending = true; s.err = '';
     render(true);
-    call('submitSurvey', [{ fun: s.fun, talked: s.talked, again: s.again, comment: s.comment.trim() }, S.pid || ''], function () {
+    var body = {
+      fun: s.fun, talked: s.talked, learned: s.learned, best: s.best, next: s.next.slice(),
+      nextOther: s.next.indexOf('その他') >= 0 ? s.nextOther.trim() : '', help: s.help,
+      comment: s.comment.trim(), snsOk: !!(s.snsOk && s.comment.trim())
+    };
+    call('submitSurvey', [body, S.pid || ''], function () {
       s.sending = false;
       setSurveyDone(true);
       /* 送ったら自分の結果へ(名前を選んでいない端末は、お礼だけ) */
@@ -1007,7 +1033,7 @@
       render(true);
     }, function (err) {
       s.sending = false;
-      s.err = err.message;
+      s.err = err.network ? '送れませんでした。電波のいいところで、もう一度「送信する」を押してね(答えは残っています)' : err.message;
       render(true);
     });
   }
@@ -1134,11 +1160,14 @@
       if (surveyDone()) { if (S.pid) openReview(); else { S.sub = 'thanks'; render(true); } return; }
       S.sub = 'survey'; S.survey.err = ''; render(true);
     },
-    survey: function (el) {
-      var k = el.getAttribute('data-k'), v = el.getAttribute('data-v');
-      S.survey[k] = k === 'again' ? v : +v;
+    survey: function (el) { S.survey[el.getAttribute('data-k')] = +el.getAttribute('data-v'); render(true); },
+    surveyPick: function (el) { S.survey[el.getAttribute('data-k')] = el.getAttribute('data-v'); render(true); },
+    surveyMulti: function (el) {
+      var arr = S.survey[el.getAttribute('data-k')], v = el.getAttribute('data-v'), i = arr.indexOf(v);
+      if (i >= 0) arr.splice(i, 1); else arr.push(v);
       render(true);
     },
+    surveySns: function () { S.survey.snsOk = !S.survey.snsOk; render(true); },
     sendSurvey: sendSurvey
   };
   var INPUTS = {
@@ -1149,6 +1178,7 @@
     },
     nickname: function (el) { S.intro.nickname = el.value; },
     surveyComment: function (el) { S.survey.comment = el.value; },
+    surveyNextOther: function (el) { S.survey.nextOther = el.value; },
     qname: function (el) {
       var q = S.quiz;
       if (!q || q.phase !== 'names') return;
