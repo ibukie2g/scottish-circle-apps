@@ -20,12 +20,15 @@ function stateData_() {
   var settings = readSettings_();
   var scores = buildScores_();
   var matches = readMatches_();
+  // バレーの準決勝が2試合とも確定したら、運動の点数・順位を返さない(画面で隠すだけにしない)
+  var hidden = sportsScoresHidden(matches);
   var out = {
     mode: st.mode,
     currentEvent: st.currentEvent,
     nextEvent: st.nextEvent,
     updatedAt: st.updatedAt,
-    sports: scores.teams.map(function (t) {
+    sportsHidden: hidden,
+    sports: hidden ? null : scores.teams.map(function (t) {
       return {
         team: t.team, basketball: t.basketball, badminton: t.badminton, dodgeball: t.dodgeball,
         volleyball: t.volleyball, sportsTotal: t.sportsTotal, sportsRank: t.sportsRank
@@ -37,7 +40,7 @@ function stateData_() {
   };
   if (st.mode === '予想') {
     var m = findMatchById_(matches, st.predictionMatchId);
-    out.prediction = m ? matchView_(m) : null;
+    out.prediction = m ? publicMatchView_(m) : null;
   }
   if (st.mode === 'クイズ' && st.quizStartedAt) out.quiz = quizTiming_(st, settings);
   if (st.mode === '結果公開') out.results = resultsView_(scores);
@@ -180,7 +183,7 @@ function predictionView_(participantId, matchId, fresh) {
   var mid = toStr_(matchId) || readState_().predictionMatchId;
   var m = mid ? findMatchById_(readMatches_(), mid) : null;
   var view = {
-    match: m ? matchView_(m) : null,
+    match: m ? publicMatchView_(m) : null,
     myTeam: me.team,
     canPredict: false,
     reason: null,

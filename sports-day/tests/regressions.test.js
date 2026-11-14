@@ -158,3 +158,19 @@ test('resetEventData:当日のデータとキャッシュの目印を消し、�
  // 来場済みの目印も消えているので、もう一度選ぶと来場時刻が入る
  g.selectSelf('P01');assert.notEqual(g.readParticipants_(true)[0].arrivedAt,null);
 });
+
+// ---- 本番前の変更(2026-11-13)----
+test('点数を隠す:バレーの準決勝が2試合とも確定したら、参加者向けの通信に点数・順位を入れない',()=>{
+ const e=world(),g=e.ctx,t=e.token;g.selectSelf('P01');
+ g.adminSaveMatch(t,'B-R1-1',12,8);g.adminSaveMatch(t,'V-SF1',25,10);
+ assert.equal(g.getState().data.sportsHidden,false);assert.equal(g.getState().data.sports.length,4);
+ g.adminSaveMatch(t,'V-SF2',25,10);
+ g.adminChangeTeam(t,'P01','D');g.adminSetPredictionStatus(t,'V-F','受付中');
+ const dump=JSON.stringify([g.getState(),g.getPrediction('P01'),g.submitPrediction('P01','V-F','A'),g.selectSelf('P01')]);
+ assert.equal(g.getState().data.sportsHidden,true);assert.equal(g.getState().data.sports,null);
+ for(const word of ['sportsTotal','sportsRank','volleyball','score1','score2','"total"','totalRank'])assert.ok(!dump.includes(word),word);
+ // 取り消したら、また見える。結果公開では結果として出す
+ g.adminUnconfirmMatch(t,'V-SF2');assert.equal(g.getState().data.sportsHidden,false);
+ g.adminSaveMatch(t,'V-SF2',25,10);g.adminPublishResults(t);
+ assert.equal(g.getState().data.sports,null);assert.equal(g.getState().data.results.teams.length,4);
+});

@@ -123,15 +123,19 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   // 試合
   assert.equal(g.adminSaveMatch(token, 'V-SF1', 20, 20).error.code, 'INVALID'); // トーナメントは引き分け不可
   ok(g.adminSaveMatch(token, 'V-SF1', 25, 20)); // A勝ち
+  st = ok(g.getState());
+  assert.equal(st.sportsHidden, false);
+  assert.equal(st.sports.find(t => t.team === 'A').volleyball, 28);
+  assert.ok(!('quiz' in st.sports[0])); // 仲良しポイントは出さない
   const r2 = ok(g.adminSaveMatch(token, 'V-SF2', 25, 18)); // C勝ち
   assert.deepEqual(r2.changes.map(c => c.id).sort(), ['V-3RD', 'V-F']);
   const ms = ok(g.adminGetMatches(token)).matches;
   assert.deepEqual([ms.find(m => m.id === 'V-F').team1, ms.find(m => m.id === 'V-F').team2], ['A', 'C']);
+  // 準決勝が2試合とも確定したら、運動の点数は参加者に返さない
   st = ok(g.getState());
-  const a = st.sports.find(t => t.team === 'A');
-  assert.equal(a.volleyball, 28);
+  assert.equal(st.sportsHidden, true);
+  assert.equal(st.sports, null);
   assert.equal(st.results, null);
-  assert.ok(!('quiz' in st.sports[0])); // 仲良しポイントは出さない
 
   // クイズ
   ok(g.adminStartQuiz(token));
@@ -225,7 +229,7 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(ok(g.adminGetScores(token2)).teams.find(t => t.team === 'A').quiz, 8.5); // P01,P02 だけ: 7×1 + 3×0.5
   assert.equal(g.adminSaveSettings(token2, { 'ないキー': 1 }).error.code, 'INVALID');
   ok(g.adminSaveSettings(token2, { 'バレー勝ちボーナス': 5 }));
-  assert.equal(ok(g.getState()).sports.find(t => t.team === 'A').volleyball, 30);
+  assert.equal(ok(g.adminGetScores(token2)).teams.find(t => t.team === 'A').volleyball, 30);
 });
 
 test('シートを直接書き換えても動く(Claude が操作する想定)', () => {

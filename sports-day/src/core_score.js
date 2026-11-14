@@ -63,6 +63,14 @@ var SETTING_KEYS = {
   'クイズ:出身地の制限時間(秒)': 'quizOriginSeconds'
 };
 
+/**
+ * 参加者に運動の点数・順位を見せないか(本番前の変更 1)
+ * バレーの準決勝2試合(V-SF1・V-SF2)がどちらも確定したら隠す = 決勝・3位決定戦の間は見せない
+ */
+function sportsScoresHidden(matches) {
+  return !!(matchResult(findMatch_(matches || [], 'V-SF1')) && matchResult(findMatch_(matches || [], 'V-SF2')));
+}
+
 /** 小数第1位に丸める */
 function round1(x) {
   return Math.round((Number(x) || 0) * 10 + 1e-9) / 10;
@@ -397,6 +405,7 @@ if (typeof module !== 'undefined' && module.exports) {
     round1: round1,
     parseSettings: parseSettings,
     matchResult: matchResult,
+    sportsScoresHidden: sportsScoresHidden,
     fillDerivedMatches: fillDerivedMatches,
     leagueStandings: leagueStandings,
     tournamentRankPoints: tournamentRankPoints,

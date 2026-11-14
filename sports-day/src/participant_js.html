@@ -436,8 +436,13 @@
         '<p class="muted" style="margin:2px 0 0">最後のクイズのヒントになるので、書いておいてね</p>' +
         '<button type="button" class="btn" data-act="openIntro">自己紹介を書く</button></div>';
     }
-    if (st.sports && st.sports.length) h += rankTable(st.sports, 'チーム順位(運動の点数)');
-    h += '<p class="note"><span class="mark">※仲良しポイント(最大20点)は、最後に発表!</span></p>';
+    if (st.sportsHidden) {
+      h += '<div class="card center"><p class="h3" style="margin:0"><span class="spark">ここからの点数はひみつ!</span></p>' +
+        '<p class="muted" style="margin:6px 0 0">順位と点数は、最後の結果発表で!</p></div>';
+    } else if (st.sports && st.sports.length) {
+      h += rankTable(st.sports, 'チーム順位(運動の点数)');
+    }
+    h += '<p class="note"><span class="mark">※仲良しポイントは、最後に発表!</span></p>';
     if (S.me && S.me.introDone) h += '<button type="button" class="btn sub" data-act="openIntro">自己紹介を見る・直す</button>';
     return h;
   };

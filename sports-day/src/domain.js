@@ -103,6 +103,14 @@ function matchView_(m) {
   };
 }
 
+/** 参加者の画面に返す試合の形。点数は入れない(決勝の間、点数を隠すため。本番前の変更 1) */
+function publicMatchView_(m) {
+  return {
+    id: m.id, sport: m.sport, round: m.round, team1: m.team1, team2: m.team2,
+    status: m.status, predictionStatus: m.predictionStatus, related: m.related
+  };
+}
+
 function readPredictions_(fresh) {
   return readTable_(SH_PREDICTIONS, fresh).rows.map(function (r) {
     return {

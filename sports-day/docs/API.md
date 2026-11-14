@@ -73,14 +73,15 @@ data = {
   nextEvent: 'バド+ドッジ',        // 次の種目(空文字あり)
   updatedAt: 1764000000000 | null, // 状態を最後に変えた時刻
   serverNow: 1764000001234,        // サーバーの今の時刻(端末の時計とのずれを直すのに使う)
-  sports: [                        // 運動の点数だけ(仲良しポイントは含めない)。A,B,C,D の順
+  sportsHidden: false,             // true = 運動の点数を隠している(バレーの準決勝 V-SF1・V-SF2 が両方確定したあと)
+  sports: null | [                 // 運動の点数だけ(仲良しポイントは含めない)。A,B,C,D の順。sportsHidden のときは null
     { team: 'A', basketball: 10, badminton: 7, dodgeball: 4, volleyball: 28,
       sportsTotal: 49, sportsRank: 1 },
     ...
   ],
-  prediction: null | {             // mode が '予想' のときだけ。予想する試合
+  prediction: null | {             // mode が '予想' のときだけ。予想する試合(点数は入れない)
     id: 'V-SF1', sport: 'バレー', round: '準決勝①', team1: 'A', team2: 'B',
-    score1: null, score2: null, status: '予定' | '確定',
+    status: '予定' | '確定',
     predictionStatus: 'なし' | '受付前' | '受付中' | '公開', related: ''
   },
   quiz: null | {                   // mode が 'クイズ' のときだけ
@@ -103,7 +104,8 @@ data = {
 }
 ```
 - 点数はすべて小数第1位まで。順位は同点なら同じ数(1,1,3,4)
-- 待ち画面:`currentEvent`/`nextEvent` と `sports`。「※仲良しポイント(最大20点)は、最後に発表!」を添える
+- 待ち画面:`currentEvent`/`nextEvent` と `sports`。「※仲良しポイントは、最後に発表!」を添える
+- **点数を隠す**(2026-11-13):バレーの準決勝2試合が確定したら `sportsHidden: true`・`sports: null` になり、参加者向けのどの関数も運動の点数・順位・試合の点数を返さない。待ち画面は「ここからの点数はひみつ!」。結果公開で `results` に出る
 - バスケ・ドッジの順位点は全試合が確定するまで0、バドは決勝・3位決定戦が確定したところから入る
 
 ### listTeamMembers(team)
