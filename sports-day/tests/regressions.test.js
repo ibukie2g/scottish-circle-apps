@@ -6,7 +6,12 @@ function world() {
  e.roster.insertSheet('フォームの回答 1').data=[['フルネーム(漢字)','フルネーム(ひらがな)','出身地(都道府県)','チーム'], ...['一','二','三'].map((x,i)=>['架空 '+x,'かくう '+x,['福島県','宮城県','山形県'][i],'C'])];
  g.setup(); e.token=g.adminLogin('pw').data.token; g.adminImportRoster(e.token); return e;
 }
+const J=x=>JSON.parse(JSON.stringify(x)); // vm の中で作ったオブジェクトを、比べられる形にする
 function match(e,id) { return e.ctx.adminGetMatches(e.token).data.matches.find(m=>m.id===id); }
+// 名前クイズの全員の締め切りを過ぎたことにする(クイズ開始時刻を10分前にする)
+function endNamePhase(e) { e.app.getSheetByName('状態').data.find(r=>r[0]==='クイズ開始時刻')[1]=new Date(Date.now()-600000); e.ctx.cache_().remove('tbl:状態'); }
+// アンケートを送って、自分の答え合わせを受け取る
+function myResult(e,pid) { const g=e.ctx; g.submitSurvey({fun:5,talked:5,again:'はい'},pid); endNamePhase(e); return g.getQuizResult(pid).data.result; }
 test('出身地と任意入力をシートに残さない・6時間で問題失効',()=>{
  const e=world(),g=e.ctx; g.adminStartQuiz(e.token);g.startQuiz('P01');
  assert.equal(g.submitQuiz('P01',{names:[],origin:'秘密の文字列'}).ok,true);
@@ -117,9 +122,11 @@ test('直接修正の10秒反映・予想リセット・集計読み取りから
 });
 test('正しい出身地だけ採点し、キャッシュ消失後も再送は名前の結果を保持',()=>{
  const e=world(),g=e.ctx;g.adminStartQuiz(e.token);const q=g.cacheGetJson_('origin:P01');
- assert.equal(g.submitQuiz('P01',{names:[],origin:q.answer}).data.origin.correct,true);
+ assert.equal(g.submitQuiz('P01',{names:[],origin:q.answer}).ok,true);
+ assert.equal(myResult(e,'P01').origin.correct,true);
  e.cache.store.clear();const result=g.getQuizResult('P01');assert.equal(result.ok,true);assert.equal(result.data.result.origin,null);
- assert.equal(g.submitQuiz('P01',{names:['偽入力'],origin:'別の入力'}).data.correctCount,0);
+ assert.equal(g.submitQuiz('P01',{names:['偽入力'],origin:'別の入力'}).data.accepted,true);
+ assert.equal(g.getQuizResult('P01').data.result.correctCount,0);
 });
 test('ふだんの状態取得と予想の取得ではロックを取らない(30人同時の負荷対策)',()=>{
  const e=world(),g=e.ctx;g.selectSelf('P01');g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
@@ -193,4 +200,46 @@ test('点数を隠す:バレーの準決勝が2試合とも確定したら、参
  g.adminUnconfirmMatch(t,'V-SF2');assert.equal(g.getState().data.sportsHidden,false);
  g.adminSaveMatch(t,'V-SF2',25,10);g.adminPublishResults(t);
  assert.equal(g.getState().data.sports,null);assert.equal(g.getState().data.results.teams.length,4);
+});
+test('答え合わせ:アンケートを送るまで返さない。送っていても、名前クイズの全員の締め切りまでは返さない',()=>{
+ const e=world(),g=e.ctx;g.adminStartQuiz(e.token);g.startQuiz('P01');
+ assert.equal(g.selectSelf('P01').data.surveyDone,false);
+ assert.deepEqual(J(g.submitQuiz('P01',{names:['架空 二'],origin:''}).data),{accepted:true,surveyDone:false});
+ let r=g.getQuizResult('P01').data;assert.deepEqual([r.answered,r.surveyDone,r.result],[true,false,null]);
+ g.submitSurvey({fun:5,talked:5,again:'はい'},'P01');
+ assert.equal(g.selectSelf('P01').data.surveyDone,true); // 端末ではなく参加者ごと
+ assert.equal(g.selectSelf('P02').data.surveyDone,false);
+ r=g.getQuizResult('P01').data;assert.equal(r.result,null);assert.equal(typeof r.availableAt,'number');
+ const dump=JSON.stringify(r);assert.ok(!dump.includes('架空'));
+ endNamePhase(e);r=g.getQuizResult('P01').data;assert.equal(r.availableAt,null);assert.equal(r.result.correctCount,1);
+ // クイズに答えていない人は、アンケートを送っても結果はない
+ g.submitSurvey({fun:5,talked:5,again:'はい'},'P02');r=g.getQuizResult('P02').data;assert.deepEqual([r.answered,r.surveyDone,r.result],[false,true,null]);
+ // 結果待ちに進んだあとは、すぐ返す
+ g.adminSetState(e.token,{mode:'結果待ち'});assert.equal(g.getQuizResult('P01').data.result.total,2);
+});
+test('運営の判断:同じチームの同じ答えは1回で判断でき、候補も選び直せる',()=>{
+ const e=world(),g=e.ctx,t=e.token;g.adminStartQuiz(t);
+ g.submitQuiz('P01',{names:['みっちゃん'],origin:''});g.submitQuiz('P02',{names:['ミッチャン'],origin:''});g.submitQuiz('P03',{names:['かくう一郎'],origin:''});
+ const list=g.adminListNearMisses(t).data;
+ assert.equal(list.pendingCount,3);
+ const grp=list.items.find(x=>x.count===2);assert.deepEqual(J(grp.numbers),[101,201]);assert.equal(grp.candidateId,'');
+ assert.equal(list.items[0].candidateId!=='',true); // 候補があるものが先
+ // 2人まとめて、P03 の 0.5人分にする
+ assert.equal(g.adminJudgeNearMiss(t,grp.numbers,'0.5人分','P03').data.updated,2);
+ for(const pid of ['P01','P02'])assert.deepEqual(J(g.readQuizAnswers_(true).find(a=>a.participantId===pid).halfIds),['P03']);
+ assert.equal(g.adminListNearMisses(t,true).data.items.find(x=>x.count===2).candidateId,'P03');
+ assert.equal(g.adminGetOverview(t).data.pendingNearMisses,1);
+});
+test('候補が出せない答えを一覧に出すかは NEAR_INCLUDE_UNKNOWN で切り替えられる',()=>{
+ const e=world(),g=e.ctx,t=e.token;g.adminStartQuiz(t);
+ require('node:vm').runInContext('NEAR_INCLUDE_UNKNOWN = false',g);
+ g.submitQuiz('P01',{names:['ぜんぜんちがう','かくう一郎'],origin:''});
+ assert.deepEqual(J(g.adminListNearMisses(t).data.items.map(x=>x.input)),['かくう一郎']);
+});
+test('名簿の名前が空白で分かれていない人数を、運営画面に返す(名前は返さない)',()=>{
+ const e=world(),g=e.ctx,t=e.token;
+ assert.equal(g.adminGetOverview(t).data.unsplitNames,0);
+ const form=e.roster.getSheetByName('フォームの回答 1');form.data[1][0]='架空一';g.invalidateRoster_();
+ assert.equal(g.adminGetOverview(t).data.unsplitNames,1);
+ assert.equal(g.adminImportRoster(t).data.unsplitNames,1);
 });

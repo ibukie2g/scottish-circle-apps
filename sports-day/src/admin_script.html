@@ -46,7 +46,9 @@
     scoreView: 'sports', // 'sports'(運動だけ) | 'total'(仲良し込み)
     scoreOrder: 'up',    // 'up' = 4位から | 'down' = 1位から
     quizStatus: null,
-    near: null,
+    near: null,          // adminListNearMisses の items(同じ答えはまとめてある)
+    nearPending: 0,      // 未判断の件数
+    nearCand: {},        // 判断の一覧で選び直した候補(番号の並び → 参加者ID)
     showJudged: false,
     odai: null,
     odaiNo: 1,
@@ -946,7 +948,7 @@
     var left = withOdai || !S.odai ? 3 : 2;
     var fin = function () { if (--left === 0 && S.tab === 'quiz') safeRender(); };
     api('adminGetQuizStatus', [], { onOk: function (d) { S.quizStatus = d; fin(); }, onErr: fin });
-    api('adminListNearMisses', [S.showJudged], { onOk: function (d) { S.near = d.items || []; fin(); }, onErr: fin });
+    api('adminListNearMisses', [S.showJudged], { onOk: function (d) { setNear(d); fin(); }, onErr: fin });
     if (withOdai || !S.odai) api('adminGetOdai', [], { onOk: function (d) { S.odai = d; fin(); }, onErr: fin });
   }
   function renderQuiz() {
@@ -962,24 +964,34 @@
     }
     h += '</div>';
 
-    // 惜しい答え
+    // 運営が判断する答え
+    h += '<div class="card"><h2>🤔 運営が判断する答え<span class="right">未判断 ' + S.nearPending + '件</span></h2>';
+    h += '<p class="sub" style="margin:0 0 6px">フルネーム・名前だけ・名字だけ・登録したあだ名は、自動で数えています。ここに出るのは、それ以外の答えです。' +
+      '判断していないものは×の扱いです。<b>結果を公開したあとでも直せます</b>(「判断済みも表示」)。あまり厳密でなくてOK。</p>';
+    h += '<label class="switch" style="margin-bottom:8px"><input type="checkbox" data-chg="showJudged"' + (S.showJudged ? ' checked' : '') + '> 判断済みも表示(直すとき)</label>';
     var items = S.near || [];
-    var pending = items.filter(function (x) { return x.judgement === '未'; }).length;
-    h += '<div class="card"><h2>🤔 惜しい答え<span class="right">未判定 ' + pending + '件</span></h2>';
-    h += '<label class="switch" style="margin-bottom:8px"><input type="checkbox" data-chg="showJudged"' + (S.showJudged ? ' checked' : '') + '> 判定済みも表示</label>';
     if (!S.near) h += '<p class="sub">読み込み中…</p>';
     else if (!items.length) h += '<p class="sub">いまはありません。</p>';
-    items.forEach(function (x) {
+    items.forEach(function (x, i) {
+      var key = x.numbers.join(',');
+      var cand = key in S.nearCand ? S.nearCand[key] : x.candidateId;
+      var mates = (S.ov.participants || []).filter(function (p) { return p.team === x.team; });
       h += '<div class="nm-item">';
-      h += '<div class="row">' + teamChip(x.team) + '<span class="sub grow">' + esc(x.participantName) + ' さんの答え</span>' +
-        (x.judgement !== '未' ? '<span class="badge ' + (x.judgement === 'OK' ? 'done' : '') + '">' + esc(x.judgement) + '</span>' : '') + '</div>';
+      h += '<div class="row">' + teamChip(x.team) + '<span class="sub grow">' + (x.count > 1 ? '<b>' + x.count + '人</b>が同じ答え' : '1人の答え') + '</span>' +
+        (x.judgement !== '未' ? '<span class="badge ' + (x.judgement === '×' ? '' : 'done') + '">' + esc(x.judgement) + '</span>' : '') + '</div>';
       h += x.input !== null && x.input !== undefined && x.input !== ''
         ? '<div class="input">「' + esc(x.input) + '」</div>'
         : '<div class="noinput">(入力は表示できません)</div>';
-      h += '<div class="sub">近い人:<b style="color:var(--ink);font-size:16px">' + esc(x.candidateName) + '</b>' + (x.candidateKana ? '(' + esc(x.candidateKana) + ')' : '') + '</div>';
+      h += '<label class="f" style="margin-top:4px">だれの答え?' + (x.candidateId ? '(アプリの推測が入っています)' : '(候補なし。分かれば選ぶ)') + '</label>';
+      h += '<select class="t" data-chg="nearCand" data-i="' + i + '"><option value="">(選ばない)</option>';
+      mates.forEach(function (p) {
+        h += '<option value="' + esc(p.id) + '"' + (p.id === cand ? ' selected' : '') + '>' + esc(p.name || p.id) + (p.kana ? '(' + esc(p.kana) + ')' : '') + '</option>';
+      });
+      h += '</select>';
       h += '<div class="row" style="margin-top:8px">' +
-        '<button class="btn ng grow" data-act="judge" data-no="' + x.number + '" data-d="NG"' + (x.judgement === 'NG' ? ' disabled' : '') + '>NG</button>' +
-        '<button class="btn ok grow" data-act="judge" data-no="' + x.number + '" data-d="OK"' + (x.judgement === 'OK' ? ' disabled' : '') + '>OK(正解にする)</button></div>';
+        '<button class="btn ng grow judge" data-act="judge" data-i="' + i + '" data-d="×"' + (x.judgement === '×' ? ' disabled' : '') + '>×</button>' +
+        '<button class="btn ghost grow judge" data-act="judge" data-i="' + i + '" data-d="0.5人分"' + (x.judgement === '0.5人分' && cand === x.candidateId ? ' disabled' : '') + '>0.5人分</button>' +
+        '<button class="btn ok grow judge" data-act="judge" data-i="' + i + '" data-d="1人分"' + (x.judgement === '1人分' && cand === x.candidateId ? ' disabled' : '') + '>1人分</button></div>';
       h += '</div>';
     });
     h += '</div>';
@@ -989,17 +1001,31 @@
     $('tab-quiz').innerHTML = h;
   }
   CHANGES.showJudged = function (el) { S.showJudged = el.checked; S.near = null; renderQuiz(); loadQuiz(false); };
+  function setNear(d) {
+    S.near = d.items || [];
+    S.nearPending = d.pendingCount || 0;
+    if (S.ov) S.ov.pendingNearMisses = S.nearPending;
+    updateHeader();
+  }
+  CHANGES.nearCand = function (el) {
+    var x = (S.near || [])[Number(el.getAttribute('data-i'))];
+    if (!x) return;
+    S.nearCand[x.numbers.join(',')] = el.value;
+    renderQuiz();
+  };
   ACTIONS.judge = function (el) {
-    var no = Number(el.getAttribute('data-no'));
+    var x = (S.near || [])[Number(el.getAttribute('data-i'))];
+    if (!x) return;
     var d = el.getAttribute('data-d');
-    api('adminJudgeNearMiss', [no, d], {
-      save: true, ok: d === 'OK' ? '正解にしました' : 'NGにしました', btn: el,
+    var key = x.numbers.join(',');
+    var cand = key in S.nearCand ? S.nearCand[key] : x.candidateId;
+    if (d !== '×' && !cand) { showStatus('err', 'だれの答えか選んでから押してください(分からなければ×)'); return; }
+    api('adminJudgeNearMiss', [x.numbers, d, cand || ''], {
+      save: true, ok: '「' + d + '」にしました' + (x.count > 1 ? '(' + x.count + '人分)' : ''), btn: el,
       onOk: function () {
-        S.near = (S.near || []).map(function (x) { if (x.number === no) x.judgement = d; return x; })
-          .filter(function (x) { return S.showJudged || x.judgement === '未'; });
-        if (S.ov) S.ov.pendingNearMisses = S.near.filter(function (x) { return x.judgement === '未'; }).length;
+        delete S.nearCand[key];
         S.scores = null;
-        renderQuiz();
+        api('adminListNearMisses', [S.showJudged], { onOk: function (r) { setNear(r); if (S.tab === 'quiz') renderQuiz(); } });
         api('adminGetQuizStatus', [], { onOk: function (q) { S.quizStatus = q; safeRender(); } });
       }
     });
@@ -1125,7 +1151,12 @@
       h += '<tr><td>' + teamChip(t) + '</td><td>' + tp.length + '</td><td>' + tp.filter(function (p) { return p.arrivedAt; }).length +
         '</td><td>' + tp.filter(function (p) { return p.introDone; }).length + '</td><td>' + tp.filter(function (p) { return !p.quizInclude; }).length + '</td></tr>';
     });
-    h += '</tbody></table></div>';
+    h += '</tbody></table>';
+    if (S.ov.unsplitNames > 0) {
+      h += '<div class="note warn" style="margin-top:10px">⚠️ 名簿の名前が「名字 名前」と空白で分かれていない人が <b>' + S.ov.unsplitNames + '人</b>います。' +
+        'その人は、名前だけ・名字だけの答えが自動で0.5人分になりません(運営の判断に回ります)。名簿ファイルの漢字とひらがなの両方にスペースを入れて、もう一度読み込んでください。</div>';
+    }
+    h += '</div>';
 
     // 名簿の読み込み
     h += '<div class="card"><h2>📥 名簿の読み込み</h2>';

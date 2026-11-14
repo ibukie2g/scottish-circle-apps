@@ -118,9 +118,10 @@ data = { team: 'A', members: [ { id: 'P01', name: '斎藤 花子', kana: 'さい
 ### selectSelf(participantId)
 名前を選んだとき。初めてならその時刻を来場時刻として記録する(何度呼んでもよい)。QRを読み直したとき、覚えているIDで呼んで本人確認にも使える。
 ```js
-data = { id: 'P01', name: '斎藤 花子', kana: 'さいとう はなこ', team: 'A', introDone: true | false }
+data = { id: 'P01', name: '斎藤 花子', kana: 'さいとう はなこ', team: 'A', introDone: true | false, surveyDone: true | false }
 ```
 - `introDone` が false なら自己紹介の入力画面へ進める
+- `surveyDone`:アンケートを送ったか(**端末ではなく参加者ごと**。端末側の「送った」の印は、この値に合わせる)
 - チームが変わっていることがある(当日のチーム変更)。表示は常にこの `team` を使う
 
 ### getIntro(participantId)
@@ -131,7 +132,7 @@ data = {
   options: {
     sports: ['バスケ', 'バレー', 'バドミントン', 'その他', '特になし'],
     snsConsent: ['顔OK', '顔を隠せばOK', '載せない'],
-    commentMax: 20, nicknameMax: 20
+    commentMax: 20, nicknameMax: 30, nicknameCount: 3
   }
 }
 ```
@@ -147,7 +148,8 @@ data = { saved: true }
 ```
 - `sport`:options.sports のどれか(必須)
 - `comment`:必須、20字まで(「思いつかなければ好きな食べ物でOK」と添える)
-- `nickname`:任意(空文字可)、20字まで
+- `nickname`:任意(空文字可)。「、」「,」「/」で区切って3つまで、合わせて30字まで(スペースは区切りにしない)。「、」でつないで保存される。4つ以上は `INVALID`
+  - 入力欄の説明:「呼ばれたい呼び方だけを書いてください。いくつかあるときは『、』で区切る。名前と関係ないあだ名がある人はここに書いてね(クイズで正解になります)」。見本は「例)はな、はなちゃん」
 - `snsConsent`:options.snsConsent のどれか(必須)。質問文「写真をサークルのSNS(インスタなど)に載せてもいいですか？」
 - 違反は `INVALID`(message にどれがだめか)
 
@@ -214,12 +216,13 @@ data = {
     choices: ['宮城県', '山形県', '福島県', '岩手県']
   }
 }
-// すでに送っていたとき(画面の開き直し)
-data = { alreadyAnswered: true, result: (submitQuiz の data と同じ形) }
+// すでに送っていたとき(画面の開き直し)。答え合わせは返さない(getQuizResult で受け取る)
+data = { alreadyAnswered: true, surveyDone: true | false }
 ```
 
 **クイズの進み方(全員同時)**
 1. 名前の問題:`nameEndsAt` まで。入力欄に `names.count` 人分の欄と、`names.hints` を「スポーツ/ひとこと」で並べる(ヒントはどの欄の人かは対応しない)。あだ名は出さない。漢字・ひらがな・カタカナどれでもよい
+   - 画面の説明:「フルネームで書くと高得点。漢字でもひらがなでもOK。名前だけ・名字だけ・あだ名でもOK(〜さん・〜先輩は付けてもOK)」。ボーナスの数字は出さない
 2. 本人が「次へ」を押すか `nameEndsAt` になったら、出身地の問題へ。出身地の問題は `originEndsAt` まで(`origin` が null なら飛ばす)
 3. 本人が選ぶか `originEndsAt` になったら、`submitQuiz` を呼ぶ(時間切れで未選択なら `origin: ''`)
 - 時間は **各自の開始からではなく、運営が「クイズ開始」を押した時刻が基準**。残り時間は `nameEndsAt - (Date.now() + (serverNow - 受け取った時の Date.now()))` のように、サーバー時刻とのずれを直して数える
@@ -228,33 +231,55 @@ data = { alreadyAnswered: true, result: (submitQuiz の data と同じ形) }
 - 答えは端末(localStorage)に置いておき、送信が失敗したら再送ボタン
 
 ### submitQuiz(participantId, answers)
-クイズの答えをまとめて1回送る。判定して、本人用の答え合わせを返す。**再送しても最初の答えのまま**(二重にならない)。mode が '結果公開' になったあとは `QUIZ_CLOSED`。
+クイズの答えをまとめて1回送る。**再送しても最初の答えのまま**(二重にならない)。mode が '結果公開' になったあとは `QUIZ_CLOSED`。
 ```js
 submitQuiz('P01', { names: ['さいとうはなこ', '渡辺太郎', ''], origin: '宮城県' })
-data = {
-  total: 7,              // 書くべき人数
-  correctCount: 5,       // 書けた人数(「7人中5人書けた!」)
-  pendingCount: 1,       // 「惜しい」で運営が確認中の人数
-  members: [             // 書けなかった人が先。あだ名は答え合わせでだけ出す
-    { name: '高橋 健', kana: 'たかはし けん', nickname: 'けんけん', written: false, pending: true },
-    { name: '斎藤 花子', kana: 'さいとう はなこ', nickname: '', written: true, pending: false },
-    ...
-  ],
-  origin: null | { targetName: '渡辺 太郎', answer: '宮城県', yourAnswer: '山形県', correct: false }
-}
+data = { accepted: true, surveyDone: true | false }
 ```
-- 書けなかった人は「〇〇さん(ひらがな)を覚えよう!」のように出す。`pending: true` は「確認中」と出してよい
-- 個人の正答率(%)は出さない
-- 判定:スペース・全角半角・カタカナ/ひらがな・よくある異体字(斎/齋/齊、辺/邊/邉、高/髙、崎/﨑 など)の違いは無視。名字+名前のフルネームで正解。同じ人を2回書いても1回分
+- **答え合わせは返さない**(2026-11-14)。送ったあとは「アンケートに答えると、自分の結果が見られるよ」と出し、アンケートを送ってから `getQuizResult` で受け取る
+- 名前の判定(サーバー側):
+  | 答え | 判定 |
+  |---|---|
+  | フルネームと完全一致(漢字・ひらがな・混ぜ書き) | 自動で1人分 |
+  | 名前だけ・名字だけ・登録したあだ名と完全一致 | 自動で0.5人分 |
+  | だれかに近い(頭2文字以上が同じ、1文字違い) | 運営が判断(1人分/0.5人分/×) |
+  | だれにも近くない | 運営の一覧の下に出る(判断しなければ×) |
+  - スペース・全角半角・カタカナ/ひらがな・よくある異体字(斎/齋/齊、辺/邊/邉、高/髙、崎/﨑 など)の違いは無視
+  - 最後の敬称(さん・先輩・せんぱい・くん・君・ちゃん・様 など)は、まずそのまま比べ、だめなら外して比べる
+  - 同じ人を何回書いても、いちばん高い1回だけ。1つの答えが何人かに当てはまるときは、どちらか1人分
 
 ### getQuizResult(participantId)
-答え合わせを取り直す(画面の開き直し・運営が惜しい答えを判定したあと)。
+自分の答え合わせを受け取る(アンケートを送ったあと・画面の開き直し・運営が判断を直したあと)。
 ```js
-data = { answered: true | false, result: null | (submitQuiz の data と同じ形) }
+data = {
+  answered: true | false,     // クイズを送ったか
+  surveyDone: true | false,   // アンケートを送ったか
+  availableAt: ms | null,     // この時刻(名前クイズの全員の締め切り)まで結果を出さない。null = もう出せる
+  serverNow: ms,
+  result: null | {
+    total: 7,              // 書くべき人数
+    correctCount: 5,       // 書けた人数(1人分 + 0.5人分。「7人中5人書けた!」)
+    fullCount: 4,          // そのうちフルネームで書けた人数
+    pendingCount: 1,       // 書けなかった人のうち、「惜しい」答えを運営が確認中の人数
+    pendingOther: 1,       // だれの答えか分からなくて、運営が確認中の答えの数
+    published: false,      // 結果公開のあとか(公開後は、確認中を出さない)
+    members: [             // 書けなかった人が先。あだ名は答え合わせでだけ出す
+      { name: '高橋 健', kana: 'たかはし けん', nickname: 'けんけん', written: false, credit: 0, pending: true },
+      { name: '斎藤 花子', kana: 'さいとう はなこ', nickname: '', written: true, credit: 1, pending: false }, // credit は 1 / 0.5 / 0
+      ...
+    ],
+    origin: null | { targetName: '渡辺 太郎', answer: '宮城県', yourAnswer: '山形県', correct: false }
+  }
+}
 ```
+- `result` が入るのは、**クイズを送っていて、アンケートも送っていて、名前クイズの全員の締め切り(nameEndsAt)を過ぎている**ときだけ
+  - `surveyDone: false` → 「アンケートに答えると、自分の結果が見られるよ」
+  - `availableAt` あり → 「自分の結果は、名前クイズが終わったら表示します」。その時刻のあとに取り直す(早く終わった人が、ほかの人が書いている間に答えを見られないようにするため)
+- 書けなかった人は「〇〇さん(ひらがな)を覚えよう!」のように出す。`pending: true` は「確認中」と出す
+- 個人の正答率(%)・チームの点数・順位は出さない(結果公開まで隠す)
 
 ### submitSurvey(survey, participantId)
-アンケート(運営だけが見る。名前は保存せず参加者IDだけ。2026-11-11 に匿名をやめた)。二重送信は端末側で防ぐ(送ったら localStorage に記録)。名前を選んでいない端末は participantId を空にする。
+アンケート(運営だけが見る。名前は保存せず参加者IDだけ。2026-11-11 に匿名をやめた)。送ったかどうかは参加者ごとにサーバーが覚える(selectSelf・getQuizResult の `surveyDone`)。名前を選んでいない端末は participantId を空にする。**送ったあと、画面は getQuizResult で自分の結果を受け取る**。
 ```js
 submitSurvey({ fun: 5, talked: 4, again: 'はい', comment: '楽しかった' }, 'P07')
 data = { saved: true }
@@ -292,7 +317,8 @@ data = {
   ],
   matches: [ { id, sport, round, team1, team2, score1, score2, status, predictionStatus, related }, ... ], // 18試合
   settings: [ { key: '順位点', value: '10,7,4,2', description: '...' }, ... ],
-  pendingNearMisses: 2, // 未判定の惜しい答えの数
+  pendingNearMisses: 2, // 運営がまだ判断していない答えの数
+  unsplitNames: 0,      // 名簿の名前が「名字 名前」と空白で分かれていない人数(名前だけ・名字だけの判定が使えない)
   serverNow: ms
 }
 ```
@@ -375,21 +401,34 @@ data = { teams: [ { team: 'A', members: 8, arrived: 8, answered: 6, nameRate: 71
 ```
 
 ### adminListNearMisses(token, includeJudged?)
-惜しい答えの一覧(未判定のみ。`includeJudged=true` なら判定済みも)。
+運営が判断する答えの一覧(未判断のみ。`includeJudged=true` なら判断済みも。公開後に直すときに使う)。**同じチームの同じ答えは1件にまとめる**。未判断が先、その中では候補があるものが先。
 ```js
-data = { items: [
-  { number: 3, participantId: 'P01', participantName: '斎藤 花子', team: 'A',
-    input: 'たかはしけ' | null,   // 書かれた名前。6時間たった・判定済み・キャッシュが消えたときは null(「入力は表示できません」と出す)
-    candidateId: 'P03', candidateName: '高橋 健', candidateKana: 'たかはし けん',
-    judgement: '未' | 'OK' | 'NG' }, ...
-] }
+data = {
+  items: [
+    { number: 101, numbers: [101, 201],  // まとめた番号(adminJudgeNearMiss に numbers をそのまま渡す)
+      count: 2,                           // 同じ答えを書いた人数
+      team: 'A',
+      input: 'たかはしけ' | null,         // 書かれた名前。6時間たった・キャッシュが消えたときは null(「入力は表示できません」と出す。まとめない)
+      candidateId: 'P03' | '',            // アプリが推測した人(だれにも近くなければ '')
+      candidateName: '高橋 健', candidateKana: 'たかはし けん',
+      judgement: '未' | '1人分' | '0.5人分' | '×' }, ...
+  ],
+  pendingCount: 3,                        // 未判断の答えの数(まとめる前)
+  decisions: ['1人分', '0.5人分', '×']
+}
 ```
 
-### adminJudgeNearMiss(token, number, decision)
-`decision` は `'OK'` か `'NG'`。OK ならその人のクイズの正解に足して正答率を計算し直す。判定済みを逆にすることもできる。
+### adminJudgeNearMiss(token, numbers, decision, candidateId?)
+運営の判断。その人のクイズの点数と総合点を計算し直す。**結果を公開したあとでも直せる**。
 ```js
-data = { number: 3, judgement: 'OK' }
+adminJudgeNearMiss(token, [101, 201], '0.5人分', 'P03')
+data = { numbers: [101, 201], judgement: '0.5人分', updated: 2 }
 ```
+- `numbers`:番号1つ、または配列(同じ答えをまとめて判断)
+- `decision`:`'1人分'` / `'0.5人分'` / `'×'`(`'未'` に戻すこともできる。古い `'OK'`=1人分・`'NG'`=× も受け付ける)
+- `candidateId`:だれの答えとして数えるか(チームメイトの一覧から選ぶ)。省くとアプリの推測のまま。1人分・0.5人分にするのに候補がない、候補がその人のクイズの対象でない、は `INVALID`
+- 同じ人は、自動の判定と運営の判断のうち高いほうだけ数える。×や未に戻すと自動の判定の点に戻る
+- 結果を公開する時点で判断していないものは×の扱い
 
 ### adminGetOdai(token)
 ```js
@@ -417,7 +456,8 @@ data = {
   added: 3,              // 参加者シートに足した人数
   teamUpdated: 0,
   teamDiffs: [ { id: 'P05', appTeam: 'B', rosterTeam: 'C' } ], // 名簿とアプリでチームが違う人(上書きしなかった)
-  totalWithTeam: 30
+  totalWithTeam: 30,
+  unsplitNames: 0        // 名前が「名字 名前」と空白で分かれていない人数(名前は返さない)
 }
 ```
 

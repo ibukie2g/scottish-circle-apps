@@ -16,7 +16,7 @@ var RH_ID = '参加者ID';
 var INTRO_SPORTS = ['バスケ', 'バレー', 'バドミントン', 'その他', '特になし'];
 var INTRO_SNS = ['顔OK', '顔を隠せばOK', '載せない'];
 var INTRO_COMMENT_MAX = 20;
-var INTRO_NICKNAME_MAX = 20;
+var INTRO_NICKNAME_MAX = 30; // 「、」で区切って3つまで書けるので、少し長めにしている
 
 /** 見出しの比較用(全角半角・空白の違いを無視) */
 function normHeader_(s) {

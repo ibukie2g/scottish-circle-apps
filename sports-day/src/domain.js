@@ -143,13 +143,33 @@ function readQuizQuestions_(fresh) {
   }).filter(function (q) { return q.participantId; });
 }
 
+/** 「P02:1,P03:0.5」→ {P02: 1, P03: 0.5}(自動判定の控え) */
+function parseCredits_(v) {
+  var out = {};
+  splitIds_(v).forEach(function (x) {
+    var m = x.match(/^(.+):(1|0\.5)$/);
+    if (m) out[m[1]] = Number(m[2]);
+  });
+  return out;
+}
+
+function formatCredits_(credits) {
+  return Object.keys(credits).map(function (id) { return id + ':' + credits[id]; }).join(',');
+}
+
 function readQuizAnswers_(fresh) {
   return readTable_(SH_QUIZ_A, fresh).rows.map(function (r) {
     var oc = toStr_(r['出身地の正誤']);
+    var fullIds = splitIds_(r['正解と判定した人のID']);
+    var auto = parseCredits_(r['自動判定(控え)']);
+    // 控えの列ができる前の行は、正解の列をそのまま自動判定とみなす
+    if (toStr_(r['自動判定(控え)']) === '') fullIds.forEach(function (id) { auto[id] = 1; });
     return {
       participantId: toStr_(r['参加者ID']),
       writtenCount: toNumOrNull_(r['書いた人数']) || 0,
-      correctIds: splitIds_(r['正解と判定した人のID']),
+      correctIds: fullIds,                                    // 1人分(運営の判断を足したあと)
+      halfIds: splitIds_(r['0.5人分と判定した人のID']),        // 0.5人分(運営の判断を足したあと)
+      auto: auto,                                             // アプリが自動で決めた分 {参加者ID: 1 | 0.5}
       nameRate: toNumOrNull_(r['名前の正答率']),
       originAnswer: (cacheGetJson_('originResponse:' + r['参加者ID']) || {}).answer || '',
       originCorrect: oc === '' ? null : toBool_(r['出身地の正誤']),
@@ -165,12 +185,11 @@ function readQuizAnswers_(fresh) {
 
 function readNearMisses_(fresh) {
   return readTable_(SH_NEAR, fresh).rows.map(function (r) {
-    var j = toStr_(r['判定']).toUpperCase();
     return {
       number: toNumOrNull_(r['番号']),
       participantId: toStr_(r['参加者ID']),
       candidateId: toStr_(r['近い候補(参加者ID)']),
-      judgement: j === 'OK' || j === 'NG' ? j : JUDGE_PENDING,
+      judgement: normJudgement_(r['判定']),
       _row: r._row
     };
   }).filter(function (n) { return n.number !== null && n.participantId; }).filter(function (n, i, all) {
@@ -178,6 +197,54 @@ function readNearMisses_(fresh) {
     for (var k = 0; k < i; k++) if (all[k].number === n.number) return false;
     return true;
   });
+}
+
+/** 判定の列の値をそろえる。古い「OK」は1人分、「NG」は×として読む。読めない値は「未」 */
+function normJudgement_(v) {
+  var s = toStr_(v).normalize('NFKC').toUpperCase();
+  if (s === 'OK' || s === '1人分' || s === '1') return JUDGE_FULL;
+  if (s === '0.5人分' || s === '0.5') return JUDGE_HALF;
+  if (s === 'NG' || s === '×' || s === 'X' || s === '✕' || s === '✗') return JUDGE_NG;
+  return JUDGE_PENDING;
+}
+
+/**
+ * 1人分の名前クイズの点数を計算し直してクイズ回答に書く(ロックの中で使う)
+ * 自動判定(控え)に、運営の判断(惜しい答えの 1人分/0.5人分)を重ねる。同じ人は高いほうだけ数える。
+ * 運営が判断を × や 未 に戻したら、自動判定の点に戻る
+ */
+function recomputeNameScore_(pid) {
+  var a = findBy_(readQuizAnswers_(true), pid);
+  var q = findBy_(readQuizQuestions_(true), pid);
+  if (!a || !q) return;
+  var credits = {};
+  Object.keys(a.auto).forEach(function (id) { credits[id] = a.auto[id]; });
+  readNearMisses_(true).forEach(function (n) {
+    if (n.participantId !== pid || !n.candidateId) return;
+    var v = n.judgement === JUDGE_FULL ? 1 : (n.judgement === JUDGE_HALF ? 0.5 : 0);
+    if (v > (credits[n.candidateId] || 0)) credits[n.candidateId] = v;
+  });
+  var s = summarizeCredits(credits, q.nameTargets);
+  updateRow_(SH_QUIZ_A, a._row, {
+    '正解と判定した人のID': s.fullIds.join(','), '0.5人分と判定した人のID': s.halfIds.join(','),
+    '名前の正答率': s.rate === null ? '' : s.rate
+  });
+}
+
+/** アンケートを送ったか(参加者ごと)。送った目印はキャッシュにも置く */
+function surveyDone_(pid) {
+  if (!pid) return false;
+  if (cache_().get('surveyDone:' + pid)) return true;
+  return readTable_(SH_SURVEY).rows.some(function (r) { return toStr_(r['参加者ID']) === pid; });
+}
+
+/** 名簿の名前が「名字 名前」と空白で分かれていない人の数(名前は返さない) */
+function countUnsplitNames_() {
+  var people = readPeople_();
+  return readParticipants_().filter(function (p) {
+    var pp = people[p.id];
+    return !pp || !isSplitName(pp);
+  }).length;
 }
 
 function readOdai_(fresh) {

@@ -117,7 +117,10 @@ function meView_(id) {
   var p = requireParticipant_(id);
   var pp = readPeople_()[id] || {};
   var intro = readIntros_()[id];
-  return { id: id, name: pp.name || id, kana: pp.kana || '', team: p.team, introDone: !!(intro && intro.comment) };
+  return {
+    id: id, name: pp.name || id, kana: pp.kana || '', team: p.team, introDone: !!(intro && intro.comment),
+    surveyDone: surveyDone_(id) // アンケートを送ったか(端末ではなく参加者ごとに持つ)
+  };
 }
 
 // ============ 自己紹介 ============
@@ -128,7 +131,10 @@ function getIntro(participantId) {
     var intro = readIntros_()[p.id];
     return {
       intro: intro ? { sport: intro.sport, comment: intro.comment, nickname: intro.nickname, snsConsent: intro.snsConsent, updatedAt: intro.updatedAt } : null,
-      options: { sports: INTRO_SPORTS, snsConsent: INTRO_SNS, commentMax: INTRO_COMMENT_MAX, nicknameMax: INTRO_NICKNAME_MAX }
+      options: {
+        sports: INTRO_SPORTS, snsConsent: INTRO_SNS, commentMax: INTRO_COMMENT_MAX,
+        nicknameMax: INTRO_NICKNAME_MAX, nicknameCount: NICKNAME_MAX_COUNT
+      }
     };
   });
 }
@@ -149,7 +155,10 @@ function saveIntro(participantId, intro) {
     if (picked.indexOf('特になし') >= 0 && picked.length > 1) throw appError_('INVALID', '「特になし」はほかのスポーツと一緒に選べません');
     var sport = picked.join('・');
     var comment = toStr_(intro.comment);
-    var nickname = toStr_(intro.nickname);
+    // あだ名は「、」「,」「/」で区切って3つまで(本番前の変更 4)。「、」でつないで保存する
+    var nicks = parseNicknames(intro.nickname);
+    if (nicks.length > NICKNAME_MAX_COUNT) throw appError_('INVALID', 'あだ名は' + NICKNAME_MAX_COUNT + 'つまでです');
+    var nickname = nicks.join('、');
     var sns = toStr_(intro.snsConsent);
     if (!comment) throw appError_('INVALID', 'ひとことを入れてください');
     if (Array.from(comment).length > INTRO_COMMENT_MAX) throw appError_('INVALID', 'ひとことは' + INTRO_COMMENT_MAX + '字までです');
@@ -319,7 +328,8 @@ function startQuiz(participantId) {
     var pid = toStr_(participantId);
     requireParticipant_(pid);
     var answered = findBy_(readQuizAnswers_(), pid);
-    if (answered) return { alreadyAnswered: true, result: quizResult_(pid, false) };
+    // 答え合わせはここでは返さない(アンケートを送ってから getQuizResult で受け取る)
+    if (answered) return { alreadyAnswered: true, surveyDone: surveyDone_(pid) };
 
     var q = findBy_(readQuizQuestions_(), pid);
     if (!q) {
@@ -357,6 +367,10 @@ function startQuiz(participantId) {
 var SLOT_BLOCK = 100;      // 予想:1試合あたりの行数(参加者は99人まで)
 var NEAR_PER_PERSON = 10;  // 惜しい答え:1人あたりの行数(それ以上はロックを取って下に足す)
 
+// だれにも近くない答え(候補が出せないもの)も、運営の判断の一覧に出すか。
+// true = 出す(未登録のあだ名を運営が拾える。判断しなければ×のまま)。false = 自動で×にして一覧に出さない
+var NEAR_INCLUDE_UNKNOWN = true;
+
 /** 惜しい答えの番号の土台。P07 → 700(1人あたり99件まで) */
 function nearMissBase_(pid) {
   var m = String(pid).match(/\d+/);
@@ -373,6 +387,7 @@ function findBy_(rows, pid) {
  * クイズの回答(最後に1回まとめて)
  * @param {string} participantId
  * @param {{names: string[], origin: string}} answers origin は選んだ都道府県名(時間切れなら '')
+ * @return {{accepted:true, surveyDone:boolean}} 答え合わせは返さない。アンケートを送ってから getQuizResult で受け取る
  */
 function submitQuiz(participantId, answers) {
   return api_(function () {
@@ -382,94 +397,100 @@ function submitQuiz(participantId, answers) {
       return toStr_(s).slice(0, 40);
     });
     var originAns = toStr_(answers.origin);
-    // 締め切りで全員が同時に送るので、ロックは「惜しい答え」の番号を振るところだけにする。
-    // 回答は行を足すだけ(読むときは同じ人の最初の行を使う)
+    // 締め切りで全員が同時に送るので、ロックは取らない。
+    // 回答は自分専用の行に書く(読むときは同じ人の最初の行を使う)
     var st = readState_(true);
     if (st.mode === '結果公開') throw appError_('QUIZ_CLOSED', 'クイズの受付は終わりました');
     // 送った目印。クイズの開始時刻ごとに分ける(開始し直したら、目印も新しくなる)
     var doneKey = 'quizDone:' + (st.quizStartedAt || '') + ':' + pid;
-    return (function () {
-      var me = requireParticipant_(pid);
-      // 再送:最初の回答のまま。送った目印はキャッシュに置く(30人同時でもシートを読み直さない)
-      if (cache_().get(doneKey) || findBy_(readQuizAnswers_(), pid)) return quizResult_(pid, true);
-      var q = findBy_(readQuizQuestions_(), pid) || findBy_(readQuizQuestions_(true), pid);
-      if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
-      if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
-      var people = readPeople_();
-      var members = q.nameTargets.map(function (id) {
-        var p = people[id] || {};
-        return { id: id, name: p.name || '', kana: p.kana || '' };
-      });
-      var j = judgeNames(names, members);
-      var originCorrect = '';
-      if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
-      cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
-      writeSlotRow_(sheet_(SH_QUIZ_A), slotRow_(me), { '参加者ID': pid }, {
-        '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.correctIds.join(','),
-        '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
-        '送信時刻': new Date()
-      });
-      cache_().put(doneKey, '1', NEAR_CACHE_SEC);
-      // 惜しい答え:番号は参加者IDから決める(P07 なら 701, 702 …)。行は1人10行ずつの自分専用の行。
-      // 送り直しで同じ番号が二重になっても、読むときに1つにまとめる(readNearMisses_)
-      var base = nearMissBase_(pid);
-      var nearSh = j.nearMisses.length ? sheet_(SH_NEAR) : null;
-      j.nearMisses.forEach(function (nm, k) {
-        var no = base + k + 1;
-        // 入力そのものはシートに書かず、キャッシュにだけ置く
-        cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
-        writeSlotRow_(nearSh, k < NEAR_PER_PERSON ? slotRow_(me, 0, 0, { per: NEAR_PER_PERSON, offset: k }) : -1,
-          { '番号': no }, { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING });
-      });
-      invalidate_([SH_QUIZ_A, SH_NEAR]);
-      // 答え合わせは、いま計算した結果から作る(書いたばかりのシートを読み直さない)
-      return buildQuizResult_(q, {
-        correctIds: j.correctIds,
-        originAnswer: q.choices.indexOf(originAns) >= 0 ? originAns : '',
-        originCorrect: originCorrect === true
-      }, j.nearMisses.map(function (nm) { return nm.candidateId; }), people);
-    })();
+    var me = requireParticipant_(pid);
+    var accepted = function () { return { accepted: true, surveyDone: surveyDone_(pid) }; };
+    // 再送:最初の回答のまま。送った目印はキャッシュに置く(30人同時でもシートを読み直さない)
+    if (cache_().get(doneKey) || findBy_(readQuizAnswers_(), pid)) return accepted();
+    var q = findBy_(readQuizQuestions_(), pid) || findBy_(readQuizQuestions_(true), pid);
+    if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
+    if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
+    var people = readPeople_();
+    var intros = readIntros_();
+    var members = q.nameTargets.map(function (id) {
+      var p = people[id] || {};
+      return { id: id, name: p.name || '', kana: p.kana || '', nickname: intros[id] ? intros[id].nickname : '' };
+    });
+    var j = judgeNames(names, members);
+    var originCorrect = '';
+    if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
+    cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
+    writeSlotRow_(sheet_(SH_QUIZ_A), slotRow_(me), { '参加者ID': pid }, {
+      '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.fullIds.join(','),
+      '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
+      '送信時刻': new Date(),
+      '0.5人分と判定した人のID': j.halfIds.join(','), '自動判定(控え)': formatCredits_(j.credits)
+    });
+    cache_().put(doneKey, '1', NEAR_CACHE_SEC);
+    // 運営が判断する答え:近い候補があるもの → 候補が出せないもの(NEAR_INCLUDE_UNKNOWN のとき)の順。
+    // 番号は参加者IDから決める(P07 なら 701, 702 …)。行は1人10行ずつの自分専用の行。
+    // 送り直しで同じ番号が二重になっても、読むときに1つにまとめる(readNearMisses_)
+    var pending = j.nearMisses.concat(NEAR_INCLUDE_UNKNOWN
+      ? j.unknowns.map(function (input) { return { input: input, candidateId: '' }; }) : []);
+    var base = nearMissBase_(pid);
+    var nearSh = pending.length ? sheet_(SH_NEAR) : null;
+    pending.forEach(function (nm, k) {
+      var no = base + k + 1;
+      // 入力そのものはシートに書かず、キャッシュにだけ置く(6時間。公開後に判断を直せるように、判断しても消さない)
+      cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
+      writeSlotRow_(nearSh, k < NEAR_PER_PERSON ? slotRow_(me, 0, 0, { per: NEAR_PER_PERSON, offset: k }) : -1,
+        { '番号': no }, { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING });
+    });
+    invalidate_([SH_QUIZ_A, SH_NEAR]);
+    return accepted();
   });
 }
 
-/** 本人にだけ見せる答え合わせ */
+/** 本人にだけ見せる答え合わせ(答えていなければ null) */
 function quizResult_(pid, fresh) {
   var a = findBy_(readQuizAnswers_(fresh), pid);
   var q = findBy_(readQuizQuestions_(fresh), pid);
   if (!a || !q) return null;
   var pending = readNearMisses_(fresh).filter(function (n) {
     return n.participantId === pid && n.judgement === JUDGE_PENDING;
-  }).map(function (n) { return n.candidateId; });
-  return buildQuizResult_(q, a, pending, readPeople_());
+  });
+  return buildQuizResult_(q, a, pending, readPeople_(), readState_(fresh).mode === '結果公開');
 }
 
 /**
- * 答え合わせの中身を作る
- * @param q 問題 / a {correctIds, originAnswer, originCorrect} / pending 運営の判定待ちの候補ID
+ * 答え合わせの中身を作る(チームの点数や順位は入れない)
+ * @param q 問題 / a クイズ回答(correctIds=1人分, halfIds=0.5人分)/ pending 運営の判断待ちの惜しい答え
+ * @param published 結果公開のあとか(公開した時点で判断していないものは×なので「確認中」を出さない)
  */
-function buildQuizResult_(q, a, pending, people) {
+function buildQuizResult_(q, a, pending, people, published) {
   // 名簿と自己紹介はクイズ中に変わらないので、キャッシュを使う(名簿ファイルを開き直さない)
   var intros = readIntros_();
+  var pendingIds = published ? [] : pending.map(function (n) { return n.candidateId; }).filter(function (x) { return x; });
   var members = q.nameTargets.map(function (id) {
     var p = people[id] || {};
     var it = intros[id];
+    var credit = a.correctIds.indexOf(id) >= 0 ? 1 : ((a.halfIds || []).indexOf(id) >= 0 ? 0.5 : 0);
     return {
       name: p.name || id,
       kana: p.kana || '',
       nickname: it ? it.nickname : '',
-      written: a.correctIds.indexOf(id) >= 0,
-      pending: a.correctIds.indexOf(id) < 0 && pending.indexOf(id) >= 0
+      written: credit > 0,
+      credit: credit,
+      pending: credit < 1 && pendingIds.indexOf(id) >= 0
     };
   });
   members.sort(function (x, y) {
     if (x.written !== y.written) return x.written ? 1 : -1; // 書けなかった人を先に
     return (x.kana || x.name).localeCompare(y.kana || y.name, 'ja');
   });
-  var correctCount = q.nameTargets.filter(function (id) { return a.correctIds.indexOf(id) >= 0; }).length;
   return {
     total: q.nameTargets.length,
-    correctCount: correctCount,
-    pendingCount: members.filter(function (m) { return m.pending; }).length,
+    correctCount: members.filter(function (m) { return m.written; }).length,
+    fullCount: members.filter(function (m) { return m.credit === 1; }).length,
+    pendingCount: members.filter(function (m) { return m.pending && !m.written; }).length,
+    // だれの答えか分からなくて、運営が確認中の答えの数
+    pendingOther: published ? 0 : pending.filter(function (n) { return !n.candidateId; }).length,
+    published: !!published,
     members: members,
     origin: q.originTarget ? {
       targetName: displayName_(people, q.originTarget),
@@ -480,13 +501,28 @@ function buildQuizResult_(q, a, pending, people) {
   };
 }
 
-/** 答え合わせを取り直す(画面を開き直したとき) */
+/**
+ * 答え合わせを受け取る(アンケートを送ったあと・画面を開き直したとき・運営が判断を直したあと)
+ * 返すのは、クイズに答えて、アンケートを送っていて、名前クイズの全員の締め切り(nameEndsAt)を過ぎているときだけ
+ * (早く終わった人が、ほかの人が書いている間に答えを見られないようにする)
+ */
 function getQuizResult(participantId) {
   return api_(function () {
     var pid = toStr_(participantId);
     requireParticipant_(pid);
-    var r = quizResult_(pid, false);
-    return { answered: !!r, result: r };
+    var st = readState_();
+    var answered = !!findBy_(readQuizAnswers_(), pid);
+    var sd = surveyDone_(pid);
+    var now = Date.now();
+    var nameEndsAt = st.mode === 'クイズ' && st.quizStartedAt ? quizTiming_(st, readSettings_()).nameEndsAt : null;
+    var waiting = nameEndsAt !== null && now < nameEndsAt;
+    return {
+      answered: answered,
+      surveyDone: sd,
+      availableAt: waiting ? nameEndsAt : null, // この時刻まで答え合わせを出さない(null = もう出せる)
+      serverNow: now,
+      result: answered && sd && !waiting ? quizResult_(pid, false) : null
+    };
   });
 }
 
@@ -522,6 +558,7 @@ function submitSurvey(survey, participantId) {
       withLock_(function () { appendRows_(SH_SURVEY, [row]); });
     }
     invalidate_([SH_SURVEY]);
+    if (me) cache_().put('surveyDone:' + pid, '1', NEAR_CACHE_SEC);
     return { saved: true };
   });
 }

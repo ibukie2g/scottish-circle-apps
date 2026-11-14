@@ -69,6 +69,7 @@ function adminGetOverview(token) {
       matches: readMatches_(true).map(matchView_),
       settings: settingsRows_(),
       pendingNearMisses: readNearMisses_(true).filter(function (n) { return n.judgement === JUDGE_PENDING; }).length,
+      unsplitNames: countUnsplitNames_(), // 名簿の名前が「名字 名前」と空白で分かれていない人数
       serverNow: Date.now()
     };
   });
@@ -347,67 +348,100 @@ function adminGetQuizStatus(token) {
 }
 
 /**
- * 惜しい答えの一覧。入力はキャッシュ(6時間)から読む。キャッシュが消えていたら input は null
- * @param {boolean} [includeJudged] true なら判定済みも返す
+ * 運営が判断する答えの一覧。同じチームの同じ答えは1件にまとめる。
+ * 入力はキャッシュ(6時間)から読む。キャッシュが消えていたら input は null(まとめずに1件ずつ出す)
+ * @param {boolean} [includeJudged] true なら判断済みも返す(公開後に直すとき)
  */
 function adminListNearMisses(token, includeJudged) {
   return adminApi_(token, function () {
     var people = readPeople_();
     var parts = readParticipants_(true);
-    var rows = readNearMisses_(true).filter(function (n) { return includeJudged || n.judgement === JUDGE_PENDING; });
+    var all = readNearMisses_(true);
+    var rows = all.filter(function (n) { return includeJudged || n.judgement === JUDGE_PENDING; });
     var cached = rows.length ? cache_().getAll(rows.map(function (n) { return 'near:' + n.number; })) : {};
-    return {
-      items: rows.map(function (n) {
-        var c = cached['near:' + n.number];
-        var input = null;
-        if (c) { try { input = JSON.parse(c).input; } catch (e) { input = null; } }
+    var groups = {};
+    var items = [];
+    rows.forEach(function (n) {
+      var c = cached['near:' + n.number];
+      var input = null;
+      if (c) { try { input = JSON.parse(c).input; } catch (e) { input = null; } }
+      var who = findParticipant_(parts, n.participantId);
+      var team = who ? who.team : '';
+      var key = [team, input === null ? '#' + n.number : normalizeName(input), n.judgement, n.candidateId].join('|');
+      var g = groups[key];
+      if (!g) {
         var cand = people[n.candidateId] || {};
-        var who = findParticipant_(parts, n.participantId);
-        return {
+        g = groups[key] = {
           number: n.number,
-          participantId: n.participantId,
-          participantName: displayName_(people, n.participantId),
-          team: who ? who.team : '',
+          numbers: [],
+          count: 0,
+          team: team,
           input: input,
           candidateId: n.candidateId,
-          candidateName: cand.name || n.candidateId,
+          candidateName: n.candidateId ? (cand.name || n.candidateId) : '',
           candidateKana: cand.kana || '',
           judgement: n.judgement
         };
-      })
+        items.push(g);
+      }
+      g.numbers.push(n.number);
+      g.count++;
+    });
+    // 未判断を先に、その中では候補があるものを先に
+    items.sort(function (a, b) {
+      var pa = a.judgement === JUDGE_PENDING ? 0 : 1, pb = b.judgement === JUDGE_PENDING ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      var ca = a.candidateId ? 0 : 1, cb = b.candidateId ? 0 : 1;
+      if (ca !== cb) return ca - cb;
+      return a.number - b.number;
+    });
+    return {
+      items: items,
+      pendingCount: all.filter(function (n) { return n.judgement === JUDGE_PENDING; }).length,
+      decisions: [JUDGE_FULL, JUDGE_HALF, JUDGE_NG]
     };
   });
 }
 
 /**
- * 惜しい答えを判定する。OK なら、その人のクイズ回答に正解として足し、正答率を計算し直す
- * 判定したら入力(キャッシュ)は消す
- * @param {number} number 惜しい答えの番号
- * @param {string} decision 'OK' か 'NG'
+ * 運営の判断。その人のクイズの点数(と総合点)を計算し直す。結果を公開したあとでも直せる
+ * @param {number|number[]} numbers 番号(同じ答えをまとめて判断するときは配列)
+ * @param {string} decision '1人分' / '0.5人分' / '×'(「未」に戻すこともできる。古い 'OK'・'NG' も可)
+ * @param {string} [candidateId] だれの答えとして数えるか。省くとアプリが推測した候補のまま
  */
-function adminJudgeNearMiss(token, number, decision) {
+function adminJudgeNearMiss(token, numbers, decision, candidateId) {
   return adminApi_(token, function () {
-    var d = toStr_(decision).toUpperCase();
-    if (d !== 'OK' && d !== 'NG') throw appError_('INVALID', '判定は OK か NG です');
-    var no = toNumOrNull_(number);
+    var d = toStr_(decision) === JUDGE_PENDING ? JUDGE_PENDING : normJudgement_(decision);
+    if (d === JUDGE_PENDING && toStr_(decision) !== JUDGE_PENDING) {
+      throw appError_('INVALID', '判断は ' + [JUDGE_FULL, JUDGE_HALF, JUDGE_NG].join(' / ') + ' のどれかです');
+    }
+    var nos = (Array.isArray(numbers) ? numbers : [numbers]).map(toNumOrNull_).filter(function (x) { return x !== null; });
+    var cand = toStr_(candidateId);
     return withLock_(function () {
-      var n = readNearMisses_(true).filter(function (x) { return x.number === no; })[0];
-      if (!n) throw appError_('NOT_FOUND', '惜しい答え ' + number + ' がありません');
-      updateRow_(SH_NEAR, n._row, { '判定': d });
-      var a = findBy_(readQuizAnswers_(true), n.participantId);
-      var q = findBy_(readQuizQuestions_(true), n.participantId);
-      if (a && q) {
-        var ids = a.correctIds.slice();
-        if (d === 'OK' && ids.indexOf(n.candidateId) < 0) ids.push(n.candidateId);
-        if (d === 'NG') ids = ids.filter(function (id) { return id !== n.candidateId || n.judgement !== 'OK'; });
-        var correct = q.nameTargets.filter(function (id) { return ids.indexOf(id) >= 0; }).length;
-        var rate = nameRate(correct, q.nameTargets.length);
-        updateRow_(SH_QUIZ_A, a._row, { '正解と判定した人のID': ids.join(','), '名前の正答率': rate === null ? '' : rate });
+      var targets = readNearMisses_(true).filter(function (x) { return nos.indexOf(x.number) >= 0; });
+      if (!targets.length) throw appError_('NOT_FOUND', '判断する答え(' + nos.join(',') + ')がありません');
+      var questions = readQuizQuestions_(true);
+      // 先に全部確かめてから書く(途中まで書いて止まらないように)
+      if (d === JUDGE_FULL || d === JUDGE_HALF) {
+        targets.forEach(function (n) {
+          var c = cand || n.candidateId;
+          if (!c) throw appError_('INVALID', 'だれの答えか選んでください');
+          var q = findBy_(questions, n.participantId);
+          if (q && q.nameTargets.indexOf(c) < 0) throw appError_('INVALID', 'その人は、この答えを書いた人のクイズの対象ではありません');
+        });
       }
-      cache_().remove('near:' + n.number);
+      var touched = [];
+      targets.forEach(function (n) {
+        var values = { '判定': d };
+        if (cand && cand !== n.candidateId) values['近い候補(参加者ID)'] = cand;
+        updateRow_(SH_NEAR, n._row, values);
+        if (touched.indexOf(n.participantId) < 0) touched.push(n.participantId);
+      });
+      invalidate_([SH_NEAR]);
+      touched.forEach(recomputeNameScore_);
       invalidate_([SH_NEAR, SH_QUIZ_A]);
       refreshSummary_();
-      return { number: n.number, judgement: d };
+      return { numbers: targets.map(function (n) { return n.number; }), judgement: d, updated: targets.length };
     });
   });
 }
@@ -462,7 +496,9 @@ function adminSaveOdai(token, input) {
 /** 名簿を読み込む(チームが入っている人にIDを採番して参加者シートへ) */
 function adminImportRoster(token, options) {
   return adminApi_(token, function () {
-    return importRoster_(!!(options && options.overwriteTeams));
+    var r = importRoster_(!!(options && options.overwriteTeams));
+    r.unsplitNames = countUnsplitNames_(); // 名前が空白で分かれていない人数(名前だけ・名字だけの判定が使えない人)
+    return r;
   });
 }
 

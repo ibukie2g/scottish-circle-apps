@@ -2,7 +2,8 @@
 /**
  * 参加者画面の動き(docs/API.md の関数だけを使う)
  * - 状態は getState を4秒ごとに取りにいき(人ごとに最初の間隔を0〜4秒ずらす)、mode に合わせて画面を切り替える
- * - 自分の参加者ID・クイズの答え・答え合わせ・アンケート送信済みは localStorage に置く(使えない環境ではメモリだけ)
+ * - 自分の参加者ID・クイズの答え・答え合わせは localStorage に置く(使えない環境ではメモリだけ)
+ * - アンケートを送ったかどうかは参加者ごとに持ち、サーバーの状態(selectSelf・getQuizResult の surveyDone)に合わせる
  * - 画面は文字列で組み立てて #app に入れる。入力中の画面(自己紹介・クイズの名前・アンケート)は、ポーリングで描き直さない
  */
 (function () {
@@ -122,14 +123,20 @@
     predWant: '',                  // 押したけれど、まだ送っていない予想(前の送信が終わったら送る)
     predEpoch: 0,                  // 予想を押すたびに増やす(古い取得の返事を捨てるため)
     quiz: null,                    // { key, phase, data, names, origin, result, err, needRestart }
-    review: null,                  // { loading, err }
-    survey: { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false },
+    review: null,                  // { loading, err, answered, surveyDone, availableAt, result }
+    survey: { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false },   // freshSurvey() と同じ形
     lastView: '', lastHtml: '', banner: ''
   };
   if (S.me && S.me.id !== S.pid) S.me = null;
 
-  function surveyDone() { return !!store.get('surveyDone'); }
-  function myResult() { return S.pid ? store.get('qres.' + S.pid) : null; }
+  /* アンケートを送ったか。端末ではなく参加者ごとに持つ(端末を貸しても、次の人は未回答のまま) */
+  function surveyDone() { return !!store.get(S.pid ? 'sv.' + S.pid : 'surveyDone'); }
+  function setSurveyDone(done) {
+    if (!S.pid) { if (done) store.set('surveyDone', true); return; }
+    if (done) store.set('sv.' + S.pid, true); else store.del('sv.' + S.pid);
+  }
+  function quizAnswered() { return !!(S.pid && store.get('qdone.' + S.pid)); }
+  function freshSurvey() { return { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false }; }
   function serverNow() { return Date.now() + S.offset; }
   function mode() { return S.state ? S.state.mode : ''; }
 
@@ -138,6 +145,7 @@
     S.me = { id: d.id, name: d.name, kana: d.kana, team: d.team, introDone: !!d.introDone };
     store.set('pid', S.pid);
     store.set('me', S.me);
+    if (typeof d.surveyDone === 'boolean') setSurveyDone(d.surveyDone);
   }
   function resetPid(msg) {
     store.del('pid'); store.del('me');
@@ -259,6 +267,7 @@
       if (m === 'クイズ' && inSub) S.sub = null;           // クイズは全員同時なので画面を切り替える
       else if (inSub && m === '予想') S.banner = '勝敗予想が始まったよ!予想する →';
       else if (inSub && m === '結果公開') S.banner = '結果が発表されたよ!見る →';
+      if (S.sub === 'review' && (m === '結果待ち' || m === '結果公開')) fetchReview();
       if (m !== '予想') { S.pred = null; S.predErr = ''; S.predWant = ''; }
     }
     if (S.pid) {
@@ -358,9 +367,10 @@
       '<input class="input" type="text" data-in="comment" value="' + esc(it.comment) + '" placeholder="例)最近サウナにハマってる" autocomplete="off">' +
       '<div class="help"><span>最近ハマっていること、自分の特徴など。思いつかなければ好きな食べ物でOK!</span>' +
       '<span id="cmtCount" class="' + (cl > commentMax ? 'over' : '') + '">' + cl + '/' + commentMax + '</span></div></div>';
-    h += '<div class="field"><div class="lbl">あだ名 <small>(任意)</small></div>' +
-      '<input class="input" type="text" data-in="nickname" value="' + esc(it.nickname) + '" placeholder="例)はなちゃん、たっくん" autocomplete="off">' +
-      '<div class="help"><span>クイズの答え合わせのときだけ出るよ</span></div></div>';
+    h += '<div class="field"><div class="lbl">あだ名 <small>(任意・' + (o.nicknameCount || 3) + 'つまで)</small></div>' +
+      '<input class="input" type="text" data-in="nickname" value="' + esc(it.nickname) + '" placeholder="例)はな、はなちゃん" autocomplete="off">' +
+      '<div class="help"><span>呼ばれたい呼び方だけを書いてください。いくつかあるときは「、」で区切る。' +
+      '名前と関係ないあだ名がある人はここに書いてね(クイズで正解になります)</span></div></div>';
     h += '<div class="field"><div class="lbl">写真をサークルのSNS(インスタなど)に載せてもいいですか？<span class="req">*</span></div><div class="choices">';
     o.snsConsent.forEach(function (v) {
       h += '<button type="button" class="choice' + (it.sns === v ? ' on' : '') + '" data-act="introSns" data-v="' + esc(v) + '">' +
@@ -383,7 +393,8 @@
     if (!it.sel.length) err = 'やっていたスポーツを選んでね';
     else if (!String(it.comment).trim()) err = 'ひとことを書いてね';
     else if (charLen(it.comment.trim()) > (o.commentMax || 20)) err = 'ひとことは' + (o.commentMax || 20) + '字までです';
-    else if (charLen(it.nickname.trim()) > (o.nicknameMax || 20)) err = 'あだ名は' + (o.nicknameMax || 20) + '字までです';
+    else if (charLen(it.nickname.trim()) > (o.nicknameMax || 30)) err = 'あだ名は' + (o.nicknameMax || 30) + '字までです';
+    else if (it.nickname.split(/[、,，\/／]/).filter(function (x) { return x.trim(); }).length > (o.nicknameCount || 3)) err = 'あだ名は' + (o.nicknameCount || 3) + 'つまでです';
     else if (!it.sns) err = '写真のSNS掲載について選んでね';
     if (err) { it.err = err; render(true); return; }
     it.saving = true; it.err = '';
@@ -606,7 +617,8 @@
     call('startQuiz', [S.pid], function (d) {
       if (S.quiz !== q) return;
       if (d.alreadyAnswered) {
-        quizDone(d.result);
+        if (typeof d.surveyDone === 'boolean') setSurveyDone(d.surveyDone);
+        quizDone();
         return;
       }
       if (then) { then(); return; }
@@ -634,11 +646,12 @@
       render(true);
     });
   }
-  function quizDone(result) {
+  /* 送信できた。答え合わせはここでは受け取らない(アンケートを送ったあとに getQuizResult で受け取る) */
+  function quizDone() {
     var q = S.quiz;
     q.phase = 'done';
-    q.result = result;
-    if (result) store.set('qres.' + S.pid, result);
+    q.result = null;
+    store.set('qdone.' + S.pid, true);
     saveQuiz();
     render(true);
   }
@@ -667,7 +680,8 @@
     };
     call('submitQuiz', [S.pid, answers], function (d) {
       if (S.quiz !== q) return;
-      quizDone(d);
+      if (d && typeof d.surveyDone === 'boolean') setSurveyDone(d.surveyDone);
+      quizDone();
     }, function (err) {
       if (S.quiz !== q || q.phase === 'done') return;
       if (handleCommonErr(err)) return;
@@ -738,7 +752,7 @@
   VIEWS.quiz = function () {
     var q = S.quiz;
     if (!q || q.phase === 'loading') return hero('mixle_think', '名前、<br>覚えてる?') + spinner('問題を受け取っています…');
-    if (q.phase === 'done') return reviewHtml(q.result, false);
+    if (q.phase === 'done') return hero('mixle_think', 'おつかれさま!') + sentHtml();
     if (q.phase === 'loadErr') {
       return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">問題を受け取れませんでした</p>' +
         '<p class="muted">' + esc(q.err) + '</p><button type="button" class="btn" data-act="quizRetryStart">もう一度</button></div>';
@@ -768,7 +782,8 @@
     var n = d.names.count;
     var h2 = hero('mixle_think', '名前、<br>覚えてる?', true);
     h2 += '<div class="card center"><div class="h2">チームのメンバー<span class="mark">' + n + '人</span>の<br>名前を書こう</div>' +
-      timerHtml(t.nameEndsAt - now) + '<p class="muted small" style="margin:8px 0 0">漢字でもひらがなでもOK!フルネームで書いてね</p></div>';
+      timerHtml(t.nameEndsAt - now) + '<p class="muted small" style="margin:8px 0 0">フルネームで書くと高得点。漢字でもひらがなでもOK。<br>' +
+      '名前だけ・名字だけ・あだ名でもOK(〜さん・〜先輩は付けてもOK)</p></div>';
     h2 += '<div class="card">';
     if (n === 0) {
       h2 += '<p class="center">書く人はいないよ。そのまま次へ進んでね</p>';
@@ -790,53 +805,96 @@
     return h2;
   };
 
-  // ============ 答え合わせ ============
+  // ============ 答え合わせ(アンケートを送ったら見られる) ============
+  /* クイズを送ったあとの画面:アンケートへの入口 */
+  function sentHtml() {
+    var h = '<div class="card center"><p class="msg">答えを送りました!</p>';
+    if (surveyDone()) {
+      h += '<button type="button" class="btn" data-act="openReview">自分の結果を見る</button></div>';
+    } else {
+      h += '<p class="muted" style="margin:6px 0 0">アンケートに答えると、自分の結果が見られるよ</p>' +
+        '<button type="button" class="btn" data-act="openSurvey">アンケートに答えて、結果を見る</button></div>';
+    }
+    return h;
+  }
+  var reviewTimer = null;
   function openReview() {
     S.sub = 'review';
-    S.review = { loading: !myResult(), err: '' };
+    S.review = { loading: true };
     render(true);
+    fetchReview();
+  }
+  function fetchReview() {
+    clearTimeout(reviewTimer);
     call('getQuizResult', [S.pid], function (d) {
-      if (d.answered && d.result) store.set('qres.' + S.pid, d.result);
-      S.review = { loading: false, err: d.answered ? '' : 'まだクイズに答えていないみたい' };
+      if (typeof d.serverNow === 'number') S.offset = d.serverNow - Date.now();
+      setSurveyDone(!!d.surveyDone);
+      if (d.answered) store.set('qdone.' + S.pid, true);
+      S.review = { loading: false, err: '', answered: d.answered, surveyDone: d.surveyDone, availableAt: d.availableAt, result: d.result };
+      /* 名前クイズの全員の締め切りまでは出ない。時間になったら取り直す(30人が同時にならないよう、少しずらす) */
+      if (d.availableAt) reviewTimer = setTimeout(function () { if (S.sub === 'review') fetchReview(); }, Math.max(1000, d.availableAt - serverNow()) + rand(500, 3000));
       if (S.sub === 'review') render(true);
     }, function (err) {
       if (handleCommonErr(err)) return;
-      S.review = { loading: false, err: myResult() ? '' : err.message };
+      S.review = { loading: false, err: err.network ? '通信を確かめています。電波のいいところで、もう一度ためしてね' : err.message };
       if (S.sub === 'review') render(true);
     });
   }
   VIEWS.review = function () {
-    var r = S.review || {};
-    if (r.loading) return hero('mixle_think', '答え合わせ') + spinner();
+    var r = S.review || { loading: true };
+    var back = '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    if (r.loading) return hero('mixle_think', '結果を<br>見てみよう') + spinner('結果を受け取っています…');
     if (r.err) {
-      return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">' + esc(r.err) + '</p>' +
-        '<button type="button" class="btn" data-act="openReview">もう一度</button>' +
-        '<button type="button" class="btn sub" data-act="closeSub">もどる</button></div>';
+      return hero('mixle_think', 'もう一度<br>ためしてね') + '<div class="card center"><p class="msg">結果を受け取れませんでした</p><p class="muted">' + esc(r.err) + '</p>' +
+        '<button type="button" class="btn" data-act="openReview">もう一度</button></div>' + back;
     }
-    return reviewHtml(myResult(), true);
+    if (!r.surveyDone) {
+      return hero('mixle_think', 'あと少し!') + '<div class="card center"><p class="msg">アンケートに答えると、<br>自分の結果が見られるよ</p>' +
+        '<button type="button" class="btn" data-act="openSurvey">アンケートに答える</button></div>' + back;
+    }
+    if (!r.answered) {
+      return hero('tsunaboru_joy', 'ありがとう!') + '<div class="card center"><p class="msg">アンケートを送りました!</p>' +
+        '<p class="muted">クイズにはまだ答えていないみたい。今日は来てくれてありがとう!</p></div>' + back;
+    }
+    if (!r.result) {
+      return hero('mixle_think', 'もうちょっと<br>待ってね') + '<div class="card center"><p class="msg">アンケートを送りました!</p>' +
+        '<p class="muted" style="margin:6px 0 0">自分の結果は、名前クイズが終わったら表示します</p>' +
+        '<button type="button" class="btn sub" data-act="openReview">↻ 最新にする</button></div>' + back;
+    }
+    return reviewHtml(r.result) + '<button type="button" class="btn sub" data-act="openReview">↻ 最新にする</button>' + back;
   };
 
-  function reviewHtml(res, withBack) {
-    if (!res) return hero('mixle_think', 'おつかれさま!') + '<div class="card center"><p class="msg">答えを送りました!</p></div>' + afterQuizButtons(withBack);
-    var h = hero('mixle_think', res.correctCount >= res.total && res.total > 0 ? 'すごい!<br>全員だね!' : 'おつかれさま!', true);
+  function reviewHtml(res) {
+    var h = hero('mixle_think', res.total > 0 && res.fullCount >= res.total ? 'すごい!<br>全員フルネーム!' : (res.total > 0 && res.correctCount >= res.total ? 'すごい!<br>全員だね!' : 'おつかれさま!'), true);
     if (res.total > 0) {
+      var notes = '';
+      if (res.fullCount < res.correctCount) notes += '<p class="muted small" style="margin:6px 0 0">うちフルネームは' + esc(res.fullCount) + '人</p>';
+      if (res.pendingCount) notes += '<p class="muted small" style="margin:6px 0 0">※' + esc(res.pendingCount) + '人は「惜しい」答えで、運営が確認中</p>';
+      if (res.pendingOther) notes += '<p class="muted small" style="margin:6px 0 0">※ほかに' + esc(res.pendingOther) + 'つの答えを、運営が確認中</p>';
       h += '<div class="card score-head"><div class="of">' + esc(res.total) + '人中</div>' +
-        '<div class="got"><b>' + esc(res.correctCount) + '</b>人書けた!</div>' +
-        (res.pendingCount ? '<p class="muted small" style="margin:6px 0 0">※' + esc(res.pendingCount) + '人は「惜しい」答えで、運営が確認中</p>' : '') + '</div>';
+        '<div class="got"><b>' + esc(res.correctCount) + '</b>人書けた!</div>' + notes + '</div>';
+    } else {
+      h += '<div class="card center"><p class="msg">答えを送りました!</p></div>';
     }
-    if (!(res.total > 0)) h += '<div class="card center"><p class="msg">答えを送りました!</p></div>';
+    function person(m, tag) {
+      return '<div class="learn"><span class="face"></span><div class="who"><div class="kana">' + esc(m.kana) + '</div>' +
+        '<div class="nm">' + esc(m.name) + '</div>' + (m.nickname ? '<div class="nick">あだ名:' + esc(m.nickname) + '</div>' : '') + '</div>' +
+        (tag ? '<span class="tag">' + tag + '</span>' : '') + '</div>';
+    }
     var missed = (res.members || []).filter(function (m) { return !m.written; });
+    var half = (res.members || []).filter(function (m) { return m.credit === 0.5; });
     if (missed.length) {
       h += '<div class="card"><div class="center"><span class="h2 mark">覚えよう!</span></div>' +
         '<p class="center h3">書けなかった' + missed.length + '人はこの人!</p>';
-      missed.forEach(function (m) {
-        h += '<div class="learn"><span class="face"></span><div class="who"><div class="kana">' + esc(m.kana) + '</div>' +
-          '<div class="nm">' + esc(m.name) + '</div>' + (m.nickname ? '<div class="nick">あだ名:' + esc(m.nickname) + '</div>' : '') + '</div>' +
-          (m.pending ? '<span class="tag">確認中</span>' : '') + '</div>';
-      });
+      missed.forEach(function (m) { h += person(m, m.pending ? '確認中' : ''); });
       h += '<p class="muted small center" style="margin:6px 0 0">今日のうちに話しかけてみよう!</p></div>';
     } else if (res.total > 0) {
-      h += '<div class="card center"><p class="msg">チーム全員の名前が書けたね!</p></div>';
+      h += '<div class="card center"><p class="msg">チーム全員、書けたね!</p></div>';
+    }
+    if (half.length) {
+      h += '<div class="card"><p class="center h3">フルネームも覚えよう!</p>';
+      half.forEach(function (m) { h += person(m, m.pending ? '確認中' : ''); });
+      h += '</div>';
     }
     if (res.origin) {
       var o = res.origin;
@@ -845,13 +903,7 @@
         (o.correct ? '<p class="okmark msg">正解!</p>'
           : '<p class="ngmark">' + (o.yourAnswer ? 'あなたの答え:' + esc(o.yourAnswer) : '時間切れ') + '</p>') + '</div>';
     }
-    return h + afterQuizButtons(withBack);
-  }
-  function afterQuizButtons(withBack) {
-    var h = '';
-    if (!surveyDone()) h += '<button type="button" class="btn" data-act="openSurvey">アンケートに進む</button>';
-    else h += '<p class="muted center">アンケートは回答済み。ありがとう!</p>';
-    if (withBack) h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    if (!res.published) h += '<p class="muted small center">チームの点数と順位は、結果発表で!</p>';
     return h;
   }
 
@@ -875,7 +927,7 @@
       '<textarea class="textarea" data-in="surveyComment" maxlength="1000" placeholder="なんでもどうぞ!">' + esc(s.comment) + '</textarea></div>';
     h += '<div id="surveyErr" class="err">' + esc(s.err) + '</div>';
     h += '<button type="button" class="btn" data-act="sendSurvey"' + (s.sending ? ' disabled' : '') + '>' + (s.sending ? '送信中…' : '送信する') + '</button>';
-    h += '<p class="muted small center" style="margin:0">回答は運営だけが見ます</p></div>';
+    h += '<p class="muted small center" style="margin:0">回答は運営だけが見ます。送ると、クイズの自分の結果が見られるよ</p></div>';
     h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
     return h;
   };
@@ -887,7 +939,9 @@
     render(true);
     call('submitSurvey', [{ fun: s.fun, talked: s.talked, again: s.again, comment: s.comment.trim() }, S.pid || ''], function () {
       s.sending = false;
-      store.set('surveyDone', true);
+      setSurveyDone(true);
+      /* 送ったら自分の結果へ(名前を選んでいない端末は、お礼だけ) */
+      if (S.pid) { openReview(); return; }
       S.sub = 'thanks';
       render(true);
     }, function (err) {
@@ -905,8 +959,13 @@
   // ============ 結果 ============
   function resultLinks() {
     var h = '';
-    if (myResult()) h += '<button type="button" class="btn sub" data-act="openReview">クイズの答え合わせを見る</button>';
-    if (!surveyDone()) h += '<button type="button" class="btn" data-act="openSurvey">アンケートに答える</button>';
+    if (!surveyDone()) {
+      h += '<button type="button" class="btn" data-act="openSurvey">' + (quizAnswered() ? 'アンケートに答えて、自分の結果を見る' : 'アンケートに答える') + '</button>';
+    } else if (quizAnswered()) {
+      h += '<button type="button" class="btn sub" data-act="openReview">クイズの自分の結果を見る</button>';
+    } else {
+      h += '<p class="muted center">アンケートは回答済み。ありがとう!</p>';
+    }
     return h;
   }
   VIEWS.resultwait = function () {
@@ -953,7 +1012,7 @@
       el.querySelector('.nm').textContent += ' …';
       call('selectSelf', [id], function (d) {
         S.selecting = false;
-        if (d.id !== S.pid) { S.quiz = null; S.pred = null; S.intro = null; }
+        if (d.id !== S.pid) { S.quiz = null; S.pred = null; S.intro = null; S.review = null; S.survey = freshSurvey(); }
         setMe(d);
         S.sub = null;
         toast('ようこそ、' + d.name + ' さん!');
@@ -992,7 +1051,10 @@
     },
     quizResend: function () { retrySubmit(); },
     openReview: function () { openReview(); },
-    openSurvey: function () { S.sub = 'survey'; S.survey.err = ''; render(true); },
+    openSurvey: function () {
+      if (surveyDone()) { if (S.pid) openReview(); else { S.sub = 'thanks'; render(true); } return; }
+      S.sub = 'survey'; S.survey.err = ''; render(true);
+    },
     survey: function (el) {
       var k = el.getAttribute('data-k'), v = el.getAttribute('data-v');
       S.survey[k] = k === 'again' ? v : +v;
