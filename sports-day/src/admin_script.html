@@ -4,6 +4,7 @@
  * - 下のタブ5つ:進行 / 試合 / 順位 / クイズ / 名簿
  * - トークンは sessionStorage に置く。AUTH が返ったらログイン画面に戻す
  * - 保存中は「保存中…」、成功で「保存しました」、失敗は理由(通信の失敗は「もう一度送る」)
+ * - 返事が30秒来ないときは「結果を確かめてください」と出し、最新の状態を取り直す(保存されていないと決めつけない)
  */
 (function () {
   'use strict';
@@ -122,21 +123,26 @@
 
   // ============ 保存中などの表示 ============
   var statusTimer = null;
+  /**
+   * 上に出すお知らせ。kind = saving / ok / err
+   * retry = 関数(「もう一度送る」ボタン)か、{ label, fn }(ボタンの文字を変えるとき。例:「最新の状態を確かめる」)
+   */
   function showStatus(kind, msg, retry) {
     var el = $('status');
     clearTimeout(statusTimer);
+    var act = typeof retry === 'function' ? { label: 'もう一度送る', fn: retry } : retry;
     el.className = 'status ' + kind;
     el.innerHTML = '<span class="msg">' + esc(msg) + '</span>' +
-      (retry ? '<button type="button" data-st="retry">もう一度送る</button>' : '') +
+      (act ? '<button type="button" data-st="retry">' + esc(act.label) + '</button>' : '') +
       (kind === 'err' ? '<button type="button" data-st="close" aria-label="閉じる">✕</button>' : '');
     el.onclick = function (e) {
       var b = e.target.closest('[data-st]');
       if (!b) return;
       hideStatus();
-      if (b.getAttribute('data-st') === 'retry' && retry) retry();
+      if (b.getAttribute('data-st') === 'retry' && act) act.fn();
     };
     if (kind === 'ok') statusTimer = setTimeout(hideStatus, 1800);
-    if (kind === 'err' && !retry) statusTimer = setTimeout(hideStatus, 6000);
+    if (kind === 'err' && !act) statusTimer = setTimeout(hideStatus, 6000);
   }
   function hideStatus() { $('status').className = 'status hidden'; }
 
@@ -165,6 +171,7 @@
   function api(fn, args, opt) {
     callRaw(fn, [S.token].concat(args || []), opt || {});
   }
+  var CALL_TIMEOUT_MS = 30000;
   function callRaw(fn, args, opt) {
     var saving = !!opt.save;
     if (saving) showStatus('saving', typeof opt.save === 'string' ? opt.save : '保存中…');
@@ -175,11 +182,32 @@
       showStatus('err', 'この画面は Apps Script の Webアプリとして開いてください');
       return;
     }
+    /* 「最新の状態を確かめる」:いまのタブを取り直す(ログイン前は何もしない) */
+    var check = { label: '最新の状態を確かめる', fn: function () { if (S.token) refreshTab(true); } };
+    /* やり直すと結果が変わる操作(クイズ開始は開始時刻が変わる)は、もう一度送らせず、まず状態を確かめる */
+    var again = opt.noRetry ? check : function () { callRaw(fn, args, opt); };
+    var timedOut = false, settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      timedOut = true;
+      done();
+      /* 返事が来ないだけで、サーバーでは終わっているかもしれない。「保存されていない」とは決めつけない */
+      showStatus('err', saving ? '返事が届きません。保存できたかどうか、結果を確かめてください' : '返事が届きません。電波を確かめて、もう一度読み込んでください', check);
+      if (opt.onErr) opt.onErr({ code: 'TIMEOUT' });
+    }, opt.timeout || CALL_TIMEOUT_MS);
     var runner = google.script.run
       .withSuccessHandler(function (res) {
+        settled = true;
+        clearTimeout(timer);
+        if (timedOut) {
+          /* 時間切れのあとに返事が届いた:古い返事で画面を書き換えず、最新の状態を取り直す */
+          if (res && res.ok && saving) showStatus('ok', '遅れて返事が届きました。最新の状態にします');
+          if (S.token) refreshTab(true);
+          return;
+        }
         done();
         if (!res || typeof res !== 'object') {
-          showStatus('err', 'サーバーから正しい返事がありませんでした', function () { callRaw(fn, args, opt); });
+          showStatus('err', 'サーバーから正しい返事がありませんでした', again);
           if (opt.onErr) opt.onErr({ code: 'INTERNAL' });
           return;
         }
@@ -193,12 +221,15 @@
         var canRetry = e.code === 'BUSY' || e.code === 'INTERNAL';
         if (e.code === 'BUSY') e.message = (e.message || '') + '(混んでいます。少し待ってもう一度)';
         if (e.code === 'SETUP') e.message = '設定が終わっていません:' + (e.message || '');
-        showStatus('err', e.message || 'うまくいきませんでした', canRetry ? function () { callRaw(fn, args, opt); } : null);
+        showStatus('err', e.message || 'うまくいきませんでした', canRetry ? again : null);
         if (opt.onErr) opt.onErr(e);
       })
       .withFailureHandler(function (err) {
+        settled = true;
+        clearTimeout(timer);
+        if (timedOut) return;
         done();
-        showStatus('err', '通信できませんでした。電波を確かめてください', function () { callRaw(fn, args, opt); });
+        showStatus('err', opt.noRetry ? '通信できませんでした。始まったかどうか、まず最新の状態を確かめてください' : '通信できませんでした。電波を確かめてください', again);
         if (opt.onErr) opt.onErr({ code: 'NETWORK', message: String(err && err.message || err) });
       });
     runner[fn].apply(runner, args);
@@ -550,7 +581,7 @@
     if (regen) body = 'まだ答えていない人の問題を作り直します。\n' + body;
     confirmBox(regen ? '問題を作り直して開始しますか？' : 'クイズを開始しますか？', body, '開始する', function () {
       api('adminStartQuiz', regen ? [{ regenerate: true }] : [], {
-        save: 'クイズを準備中…', ok: 'クイズを開始しました',
+        save: 'クイズを準備中…', ok: 'クイズを開始しました', noRetry: true,
         onOk: function (d) {
           S.ov.state = d.state;
           showStatus('ok', 'クイズを開始しました(問題 ' + d.generated + '人分を作成)');
@@ -688,7 +719,7 @@
       }
     }
   };
-  // 2つ目の点数で「完了」を押したら確定(キーボードから手を離さずに済む)
+  /* 点数欄の Enter は、次の欄へ進む・入力を終えるだけ。確定は大きなボタンで押す(押しまちがいで確定しないように) */
   document.querySelector('main').addEventListener('keydown', function (e) {
     var el = e.target;
     if (e.key !== 'Enter' || !el.classList || !el.classList.contains('score')) return;
@@ -698,10 +729,32 @@
       if (next) next.focus();
     } else {
       el.blur();
-      var b = document.querySelector('[data-act="saveMatch"][data-id="' + el.getAttribute('data-id') + '"]');
-      if (b && !b.disabled) ACTIONS.saveMatch(b);
     }
   });
+  /**
+   * 準決勝(バド D-SF・バレー V-SF)の修正・取消で、あとの試合から消えるもの。
+   * 勝ったチームが変わる(または確定を取り消す)と、決勝・3位決定戦・ドッジ(G-3・G-4)の組み合わせが入れ直され、
+   * その試合の点数・確定・予想が消える(サーバーの動きは前からこのとおり)。消えるものが無ければ空の配列
+   * @param newWinner 修正後に勝つチーム(確定の取消なら null)
+   */
+  function semifinalImpact(m, newWinner) {
+    var mt = /^([DV])-SF[12]$/.exec(m.id);
+    if (!mt || m.status !== '確定') return [];
+    var oldWinner = m.score1 > m.score2 ? m.team1 : m.team2;
+    if (newWinner && newWinner === oldWinner) return [];
+    var ids = mt[1] === 'D' ? ['D-F', 'D-3RD', 'G-3', 'G-4'] : ['V-F', 'V-3RD'];
+    var lost = [];
+    ids.forEach(function (id) {
+      var x = matchById(id);
+      if (!x || !x.team1 || !x.team2) return;
+      var what = [];
+      if (x.status === '確定') what.push('確定した点数 ' + x.team1 + ' ' + x.score1 + '-' + x.score2 + ' ' + x.team2);
+      else if (x.score1 !== null && x.score1 !== undefined && x.score1 !== '') what.push('入力した点数');
+      if (x.predictionStatus === '受付中' || x.predictionStatus === '公開') what.push('集まった予想(受付前に戻ります)');
+      if (what.length) lost.push('・' + matchLabel(x) + ':' + what.join('、'));
+    });
+    return lost;
+  }
   ACTIONS.resetDraft = function (el) { delete S.drafts[el.getAttribute('data-id')]; renderMatches(); };
   ACTIONS.saveMatch = function (el) {
     var id = el.getAttribute('data-id');
@@ -713,26 +766,38 @@
     if (isNaN(n1) || isNaN(n2) || n1 < 0 || n2 < 0) { showStatus('err', '点数は0以上の数で入れてください'); return; }
     if ((m.sport === 'バド' || m.sport === 'バレー') && n1 === n2) { showStatus('err', 'トーナメントの試合は引き分けにできません'); return; }
     var wasConfirmed = m.status === '確定';
-    api('adminSaveMatch', [id, n1, n2], {
-      save: true, btn: el,
-      onOk: function (r) {
-        delete S.drafts[id];
-        replaceMatch(r.match);
-        (r.changes || []).forEach(function (c) {
-          var x = matchById(c.id);
-          if (x) { x.team1 = c.team1; x.team2 = c.team2; }
-        });
-        S.scores = null;
-        var msg = (wasConfirmed ? '修正しました ' : '確定しました ') + r.match.team1 + ' ' + r.match.score1 + '-' + r.match.score2 + ' ' + r.match.team2;
-        if (r.predictionClosed) { msg += '/予想も締め切りました'; delete S.pred[id]; }
-        if (r.changes && r.changes.length) {
-          msg += '/自動で入れた対戦:' + r.changes.map(function (c) { var x = matchById(c.id); return (x ? x.sport + x.round : c.id) + ' ' + c.team1 + '-' + c.team2; }).join('、');
+    var send = function () {
+      api('adminSaveMatch', [id, n1, n2], {
+        save: true, btn: el,
+        onOk: function (r) {
+          delete S.drafts[id];
+          replaceMatch(r.match);
+          (r.changes || []).forEach(function (c) {
+            var x = matchById(c.id);
+            if (x) { x.team1 = c.team1; x.team2 = c.team2; }
+          });
+          S.scores = null;
+          var msg = (wasConfirmed ? '修正しました ' : '確定しました ') + r.match.team1 + ' ' + r.match.score1 + '-' + r.match.score2 + ' ' + r.match.team2;
+          if (r.predictionClosed) { msg += '/予想も締め切りました'; delete S.pred[id]; }
+          if (r.changes && r.changes.length) {
+            msg += '/自動で入れた対戦:' + r.changes.map(function (c) { var x = matchById(c.id); return (x ? x.sport + x.round : c.id) + ' ' + c.team1 + '-' + c.team2; }).join('、');
+          }
+          showStatus('ok', msg);
+          render();
+          /* 組み合わせが変わると、関連する試合の点数・確定・予想も変わるので、試合をまとめて取り直す */
+          if (r.changes && r.changes.length) { S.pred = {}; loadOverview(function () { loadPredSummaries(); safeRender(); }); }
+          else loadPredSummaries();
         }
-        showStatus('ok', msg);
-        render();
-        loadPredSummaries();
-      }
-    });
+      });
+    };
+    /* 準決勝の修正で勝ったチームが変わるときは、あとの試合から消えるものを出して確かめる */
+    var lost = semifinalImpact(m, n1 > n2 ? m.team1 : m.team2);
+    if (lost.length) {
+      confirmBox('修正すると、あとの試合の記録が消えます', matchLabel(m) + ' の勝ったチームが変わるので、決勝・3位決定戦などの組み合わせを入れ直します。次のものが消えます。\n\n' +
+        lost.join('\n') + '\n\n消えた試合は、もう一度点数を入れてください。', '修正して確定', send, true);
+      return;
+    }
+    send();
   };
   function replaceMatch(nm) {
     var ms = S.ov.matches;
@@ -741,12 +806,22 @@
   ACTIONS.unconfirm = function (el) {
     var id = el.getAttribute('data-id');
     var m = matchById(id);
-    confirmBox('確定を取り消しますか？', matchLabel(m) + ' を「予定」に戻します(点数は残ります)。集計から外れます。', '取り消す', function () {
+    var lost = semifinalImpact(m, null);
+    var body = matchLabel(m) + ' を「予定」に戻します(点数は残ります)。集計から外れます。';
+    if (lost.length) {
+      body += '\n\n準決勝の確定を取り消すと、決勝・3位決定戦などの組み合わせが空に戻り、次のものが消えます。\n\n' + lost.join('\n');
+    }
+    confirmBox(lost.length ? '取り消すと、あとの試合の記録が消えます' : '確定を取り消しますか？', body, '取り消す', function () {
       api('adminUnconfirmMatch', [id], {
         save: true, ok: '「予定」に戻しました',
-        onOk: function (r) { replaceMatch(r.match); S.scores = null; render(); }
+        onOk: function (r) {
+          replaceMatch(r.match); S.scores = null; render();
+          /* 関連する試合(決勝・3位決定戦・ドッジ)も変わることがあるので、取り直す */
+          S.pred = {};
+          loadOverview(function () { loadPredSummaries(); safeRender(); });
+        }
       });
-    });
+    }, lost.length > 0);
   };
   ACTIONS.fixTeams = function (el) {
     var id = el.getAttribute('data-id');
