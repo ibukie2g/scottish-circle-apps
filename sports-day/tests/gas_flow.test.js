@@ -261,10 +261,23 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   // 判断したあとも入力は(6時間)残る。公開後に直せるように
   assert.deepEqual(ok(g.adminListNearMisses(token, true)).items.map(x => [x.input, x.judgement]), [['たかはしけ', '1人分'], ['なぞのひと', '×']]);
 
-  // キャッシュが消えても(入力が null でも)判断・集計はできる
+  // 名前の控えは名簿ファイルにだけ書く(アプリ用ファイルには書かない)
   ok(g.submitQuiz('P03', { names: ['さいとうはなご'], origin: '' }));
+  const nearRoster = env.roster.getSheetByName('惜しい答え(入力)');
+  assert.ok(nearRoster, '名簿ファイルに控えのシートがある');
+  assert.ok(JSON.stringify(nearRoster.data).includes('さいとうはなご'));
+  assert.ok(!JSON.stringify(app.getSheets().map(s => s.data)).includes('さいとうはなご'));
+  // キャッシュが消えても、名簿ファイルの控えから入力を出せる
   cache.store.clear();
-  const token2 = ok(g.adminLogin('pw')).token;
+  let token2 = ok(g.adminLogin('pw')).token;
+  near = ok(g.adminListNearMisses(token2)).items;
+  assert.equal(near.length, 1);
+  assert.equal(near[0].input, 'さいとうはなご');
+  assert.deepEqual(ok(g.adminListNearMisses(token2, true)).items.map(x => x.input).sort(), ['さいとうはなご', 'たかはしけ', 'なぞのひと'].sort());
+  // 控えも読めないとき(入力が null でも)判断・集計はできる
+  nearRoster.data = [nearRoster.data[0]];
+  cache.store.clear();
+  token2 = ok(g.adminLogin('pw')).token;
   near = ok(g.adminListNearMisses(token2)).items;
   assert.equal(near.length, 1);
   assert.equal(near[0].input, null);

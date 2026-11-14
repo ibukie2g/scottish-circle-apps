@@ -46,9 +46,12 @@ function appSheets_() {
 // 名簿ファイルに作るシート
 var ROSTER_INTRO_SHEET = '自己紹介';
 var ROSTER_WALKIN_SHEET = '当日追加';
+var ROSTER_NEAR_SHEET = '惜しい答え(入力)'; // 運営が判断する答えに書かれた名前。キャッシュが消えたときの控え
+var ROSTER_NEAR_HEADERS = ['番号', '参加者ID', '書いた名前', '送信時刻'];
 var ROSTER_SHEETS = [
   [ROSTER_INTRO_SHEET, ['参加者ID', 'やっていたスポーツ', 'ひとこと(20字)', 'あだ名(任意)', '写真のSNS掲載', '更新時刻']],
-  [ROSTER_WALKIN_SHEET, ['参加者ID', 'フルネーム(漢字)', 'フルネーム(ひらがな)', 'チーム', '出身地(都道府県)', '追加時刻']]
+  [ROSTER_WALKIN_SHEET, ['参加者ID', 'フルネーム(漢字)', 'フルネーム(ひらがな)', 'チーム', '出身地(都道府県)', '追加時刻']],
+  [ROSTER_NEAR_SHEET, ROSTER_NEAR_HEADERS]
 ];
 
 var INITIAL_STATE = [
@@ -242,8 +245,13 @@ function resetEventData() {
     if (psh.getLastRow() > 1) psh.getRange(2, col, psh.getLastRow() - 1, 1).clearContent();
     log.push('来場時刻を消しました(参加者 ' + parts.rows.length + '人とチーム分けは残しています)');
 
-    clearBody_(rosterSheet_(rosterSs_(), ROSTER_INTRO_SHEET));
+    var rss = rosterSs_();
+    clearBody_(rosterSheet_(rss, ROSTER_INTRO_SHEET));
     log.push('名簿ファイルの「自己紹介」を消しました');
+    if (rss.getSheetByName(ROSTER_NEAR_SHEET)) {
+      clearBody_(rss.getSheetByName(ROSTER_NEAR_SHEET));
+      log.push('名簿ファイルの「' + ROSTER_NEAR_SHEET + '」を消しました');
+    }
 
     invalidate_(appSheets_().map(function (d) { return d[0]; }));
     invalidateRoster_();

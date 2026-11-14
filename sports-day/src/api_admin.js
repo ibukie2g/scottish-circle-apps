@@ -321,6 +321,8 @@ function startQuizInternal_(regenerate) {
   }
   writeState_({ 'モード': 'クイズ', 'クイズ開始時刻': new Date() });
   invalidate_([SH_QUIZ_Q]);
+  // 名前の控えのシートを、全員が一斉に送る前に作っておく(なくても送信は止めない)
+  try { rosterNearSheet_(true); } catch (e) { console.warn('名簿ファイルに「' + ROSTER_NEAR_SHEET + '」を作れませんでした: ' + e); }
   return { generated: made.length, kept: keep.length };
 }
 
@@ -350,7 +352,8 @@ function adminGetQuizStatus(token) {
 
 /**
  * 運営が判断する答えの一覧。同じチームの同じ答えは1件にまとめる。
- * 入力はキャッシュ(6時間)から読む。キャッシュが消えていたら input は null(まとめずに1件ずつ出す)
+ * 入力はキャッシュ(6時間)から読む。キャッシュが消えていたら名簿ファイルの控え(「惜しい答え(入力)」)から読む。
+ * どちらにもなければ input は null(まとめずに1件ずつ出す)
  * @param {boolean} [includeJudged] true なら判断済みも返す(公開後に直すとき)
  */
 function adminListNearMisses(token, includeJudged) {
@@ -360,12 +363,16 @@ function adminListNearMisses(token, includeJudged) {
     var all = readNearMisses_(true);
     var rows = all.filter(function (n) { return includeJudged || n.judgement === JUDGE_PENDING; });
     var cached = rows.length ? cache_().getAll(rows.map(function (n) { return 'near:' + n.number; })) : {};
+    // キャッシュが消えていた分だけ、名簿ファイルの控えから読む
+    var missing = rows.filter(function (n) { return !cached['near:' + n.number]; }).map(function (n) { return n.number; });
+    var saved = readNearInputs_(missing);
     var groups = {};
     var items = [];
     rows.forEach(function (n) {
       var c = cached['near:' + n.number];
       var input = null;
       if (c) { try { input = JSON.parse(c).input; } catch (e) { input = null; } }
+      if (input === null && saved[String(n.number)] !== undefined) input = saved[String(n.number)];
       var who = findParticipant_(parts, n.participantId);
       var team = who ? who.team : '';
       var key = [team, input === null ? '#' + n.number : normalizeName(input), n.judgement, n.candidateId].join('|');

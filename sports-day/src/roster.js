@@ -168,6 +168,67 @@ function writeIntro_(id, intro) {
   cache_().remove('intros:v1');
 }
 
+/**
+ * 運営が判断する答えに書かれた名前の控え(名簿ファイルの「惜しい答え(入力)」シート)。
+ * 入力はふだんキャッシュから読むが、キャッシュは6時間より早く消えることがあるので、名簿ファイルにも書いておく。
+ * 名前は個人情報なので、アプリ用ファイルではなく名簿ファイルに置く。
+ * シートがなければ作る(setup を実行していない環境でも動くように)。
+ */
+function rosterNearSheet_(create) {
+  var ss = rosterSs_();
+  var sh = ss.getSheetByName(ROSTER_NEAR_SHEET);
+  if (sh || !create) return sh;
+  return withLock_(function () {
+    if (!ss.getSheetByName(ROSTER_NEAR_SHEET)) ensureSheet_(ss, ROSTER_NEAR_SHEET, ROSTER_NEAR_HEADERS);
+    return ss.getSheetByName(ROSTER_NEAR_SHEET);
+  });
+}
+
+/**
+ * 名前の控えを書く。行は「惜しい答え」シートと同じく1人10行ずつの自分専用の行(ロックなし)。
+ * 控えなので、書けなくてもクイズの送信は失敗にしない
+ * @param me 参加者 / items [{number, input}] / perPerson 1人あたりの行数
+ */
+function writeNearInputs_(me, items, perPerson) {
+  if (!items.length) return;
+  try {
+    var sh = rosterNearSheet_(true);
+    items.forEach(function (it, k) {
+      writeSlotRow_(sh, k < perPerson ? slotRow_(me, 0, 0, { per: perPerson, offset: k }) : -1,
+        { '番号': it.number }, { '番号': it.number, '参加者ID': me.id, '書いた名前': it.input, '送信時刻': new Date() });
+    });
+  } catch (e) {
+    console.warn('惜しい答えの控えを名簿ファイルに書けませんでした: ' + e);
+  }
+}
+
+/**
+ * 名前の控えを読む。読めなければ空(画面には「入力は表示できません」と出る)
+ * @param {number[]} numbers
+ * @return {Object<string, string>} 番号 → 書いた名前
+ */
+function readNearInputs_(numbers) {
+  var out = {};
+  if (!numbers.length) return out;
+  try {
+    var sh = rosterNearSheet_(false);
+    if (!sh || sh.getLastRow() < 2) return out;
+    var values = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+    var h = values[0];
+    var cNo = findCol_(h, '番号'), cIn = findCol_(h, '書いた名前');
+    if (cNo < 0 || cIn < 0) return out;
+    var want = {};
+    numbers.forEach(function (n) { want[String(n)] = true; });
+    for (var i = 1; i < values.length; i++) {
+      var no = toStr_(values[i][cNo]);
+      if (want[no] && toStr_(values[i][cIn]) !== '') out[no] = toStr_(values[i][cIn]);
+    }
+  } catch (e) {
+    console.warn('惜しい答えの控えを名簿ファイルから読めませんでした: ' + e);
+  }
+  return out;
+}
+
 /** 次の参加者ID(P01, P02, ...)の番号 */
 function nextIdNumber_(ids) {
   var max = 0;
