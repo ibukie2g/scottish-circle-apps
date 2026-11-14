@@ -392,3 +392,26 @@ function clearMatchPredictions_(mid) {
     invalidate_([name]);
   });
 }
+
+/**
+ * 「ひとこと」(読み込み中と待ち画面に出す一言)。ひとことシートの「使う」に○がある行だけ
+ * シートがまだ無い(setup() をやり直していない)ときは、最初の候補をそのまま使う
+ * @return {{text:string, mode:string}[]} mode は TIP_MODES のどれか(読めない値は「いつでも」)
+ */
+function readTips_() {
+  var rows;
+  try {
+    rows = readTable_(SH_TIPS).rows;
+  } catch (e) {
+    return INITIAL_TIPS.map(function (r) { return { text: r[0], mode: r[1] }; });
+  }
+  return rows.filter(function (r) { return toStr_(r['一言']) && toBool_(r['使う']); }).map(function (r) {
+    var mode = toStr_(r['出すモード']);
+    return { text: toStr_(r['一言']), mode: TIP_MODES.indexOf(mode) >= 0 ? mode : 'いつでも' };
+  });
+}
+
+/** ひとことを、ページの <script> にそのまま埋め込める JSON にする(「<」を逃がして、タグとして読まれないようにする) */
+function tipsJson_() {
+  return JSON.stringify(readTips_()).replace(/</g, '\\u003c').replace(/\u2028|\u2029/g, '');
+}

@@ -363,3 +363,20 @@ test('predictionTeamRates: 確定した試合の予想だけ数える',()=>{
   {matchId:'V-SF2',team:'A',choice:'C'},{matchId:'V-SF1',team:'A',choice:'A'}]); // V-SF2 は未確定、試合に出ているチームの予想は数えない
  assert.deepEqual(r,{A:null,B:null,C:0.5,D:1});
 });
+test('ひとこと:setup で候補16個を○付きで入れ、「使う」に○があるものだけページに埋め込む',()=>{
+ const e=world(),g=e.ctx,sh=e.app.getSheetByName('ひとこと');
+ assert.deepEqual(J(sh.data[0]),['一言','出すモード','使う']);
+ assert.equal(sh.getLastRow(),17);
+ let tips=J(g.readTips_());assert.equal(tips.length,16);
+ assert.deepEqual([...new Set(tips.map(t=>t.mode))],['いつでも','待ち','予想','クイズの前','結果公開']);
+ assert.ok(!tips.some(t=>t.text.includes('何年生'))); // 外した候補
+ // ○を外したものは出さない。知らないモードは「いつでも」。setup をやり直しても、消した候補を足し直さない
+ sh.data[1][2]='';sh.data[2][1]='へんなモード';sh.data[3][0]='</script><b>x';g.invalidate_(['ひとこと']);g.setup();
+ tips=J(g.readTips_());assert.equal(tips.length,15);assert.equal(tips[0].mode,'いつでも');
+ assert.equal(sh.getLastRow(),17);
+ const json=g.tipsJson_();assert.ok(!json.includes('<'));assert.equal(JSON.parse(json)[1].text,'</script><b>x');
+ // シートが無くても(setup をやり直す前でも)落ちない
+ e.app.deleteSheet(sh);g.invalidate_(['ひとこと']);assert.equal(J(g.readTips_()).length,16);
+ // 当日のデータを消しても、ひとことは残す
+ const e2=world();e2.ctx.resetEventData();assert.equal(e2.app.getSheetByName('ひとこと').getLastRow(),17);
+});

@@ -15,6 +15,9 @@ function doGet(e) {
   var isAdmin = params.page === 'admin';
   var t = HtmlService.createTemplateFromFile(isAdmin ? 'admin' : 'participant');
   t.team = normTeam_(params.team); // A〜D 以外は ''
+  // 「ひとこと」は、アプリを開いたときにページに埋め込む(読み込み中にも出せる。通信は増えない)
+  t.tips = '[]';
+  if (!isAdmin) { try { t.tips = tipsJson_(); } catch (err) { t.tips = '[]'; } }
   return t.evaluate()
     .setTitle(isAdmin ? '運動会 運営' : '合同運動会')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');

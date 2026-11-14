@@ -167,12 +167,24 @@
         d.quiz = timing();
       }
       if (cfg.mode === '結果公開') {
+        /* 内訳(breakdown)と 👑 の名前つき。数字は見本 */
+        var bd = function (b, d2, g, vs, vw, qn, qo, pr) {
+          return { basketballRank: b, badmintonRank: d2, dodgeballRank: g, volleyScored: vs, volleyWins: vw, volleyBonus: vw * 4,
+            quizNamePoints: qn, quizOriginPoints: qo, predictionRate: pr };
+        };
         d.results = { teams: [
-          { team: 'A', sportsTotal: 49, sportsRank: 1, quiz: 5.7, odai: 3.1, prediction: 1.3, nakayoshiTotal: 10.1, total: 59.1, totalRank: 2 },
-          { team: 'B', sportsTotal: 37.5, sportsRank: 2, quiz: 8.2, odai: 4.5, prediction: 3, nakayoshiTotal: 15.7, total: 53.2, totalRank: 3 },
-          { team: 'C', sportsTotal: 32, sportsRank: 3, quiz: 9.1, odai: 6, prediction: 4, nakayoshiTotal: 19.1, total: 61.1, totalRank: 1 },
-          { team: 'D', sportsTotal: 25, sportsRank: 4, quiz: 6, odai: 2, prediction: 2, nakayoshiTotal: 10, total: 35, totalRank: 4 }
-        ] };
+          { team: 'A', basketball: 10, badminton: 7, dodgeball: 4, volleyball: 58, sportsTotal: 79, sportsRank: 1, quiz: 5.7, odai: 3.1, prediction: 1.3, nakayoshiTotal: 10.1, total: 89.1, totalRank: 2,
+            quizNameRate: 62.4, quizOriginRate: 44.4, breakdown: bd(1, 2, 3, 50, 2, 4.4, 1.3, 33.3) },
+          { team: 'B', basketball: 7, badminton: 10, dodgeball: 2, volleyball: 49, sportsTotal: 68, sportsRank: 2, quiz: 8.2, odai: 4.5, prediction: 3, nakayoshiTotal: 15.7, total: 83.7, totalRank: 3,
+            quizNameRate: 88.6, quizOriginRate: 66.7, breakdown: bd(2, 1, 4, 45, 1, 6.2, 2, 75) },
+          { team: 'C', basketball: 4, badminton: 4, dodgeball: 10, volleyball: 56, sportsTotal: 74, sportsRank: 3, quiz: 9.1, odai: 6, prediction: 4, nakayoshiTotal: 19.1, total: 93.1, totalRank: 1,
+            quizNameRate: 104.3, quizOriginRate: 60, breakdown: bd(3, 3, 1, 52, 1, 7.3, 1.8, 100) },
+          { team: 'D', basketball: 2, badminton: 2, dodgeball: 7, volleyball: 40, sportsTotal: 51, sportsRank: 4, quiz: 6, odai: 2, prediction: 2, nakayoshiTotal: 10, total: 61, totalRank: 4,
+            quizNameRate: 64.3, quizOriginRate: 50, breakdown: bd(4, 4, 2, 40, 0, 4.5, 1.5, 50) }
+        ], crowns: {
+          allFull: [{ name: people[2].name, team: people[2].team }],
+          complete: [{ name: people[5].name, team: people[5].team }, { name: people[8].name, team: people[8].team }]
+        } };
       }
       return { ok: true, data: d };
     },

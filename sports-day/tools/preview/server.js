@@ -22,6 +22,15 @@ function page(team) {
   let html = include('participant');
   html = html.replace(/<\?!=\s*include\('([\w]+)'\)\s*\?>/g, (_, n) => include(n));
   html = html.replace(/<\?!=\s*team\s*\?>/g, team);
+  // ひとこと(本番はひとことシートから。ここでは見本を埋める)
+  const tips = [
+    { text: '話しかけるときは名前を呼ぶと覚えてもらいやすいよ', mode: 'いつでも' },
+    { text: '水分補給、忘れずに💧', mode: '待ち' },
+    { text: '予想は締め切りまで何回でも変えられるよ', mode: '予想' },
+    { text: 'フルネームで書くと高得点!', mode: 'クイズの前' },
+    { text: '次回のサークルも来てね〜', mode: '結果公開' }
+  ];
+  html = html.replace(/<\?!=\s*tips\s*\?>/g, JSON.stringify(tips));
   const mock = '<script>' + fs.readFileSync(path.join(__dirname, 'mock.js'), 'utf8') + '</script>';
   return html.replace('<head>', '<head>\n' + mock);
 }

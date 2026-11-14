@@ -62,7 +62,37 @@
     return '<div class="hero' + (small ? ' small' : '') + '">' + img(key, '', '') +
       (text ? '<div class="bubble">' + text + '</div>' : '') + '</div>';
   }
-  function spinner(text) { return '<div class="loading"><div class="spinner"></div><p>' + esc(text || '読み込み中…') + '</p></div>'; }
+  /* 読み込み中:つなぼるが跳ねる + その下に「ひとこと」(noTip ならひとことを出さない。クイズ中など) */
+  function spinner(text, noTip) {
+    return '<div class="loading">' + (ASSET.tsunaboru_normal ? '<div class="bounce">' + img('tsunaboru_normal', '', '') + '</div><div class="bounce-shadow"></div>' : '<div class="spinner"></div>') +
+      '<p>' + esc(text || '読み込み中…') + '</p>' + (noTip ? '' : tipHtml(['いつでも'])) + '</div>';
+  }
+
+  // ============ ひとこと ============
+  /* ひとことシートの一言を、人ごとにランダムに出す。10秒ごとに入れ替える。クイズ中は出さない */
+  var TIP_LIST = (typeof TIPS !== 'undefined' && TIPS && TIPS.length) ? TIPS : [];
+  var tipNow = { key: '', text: '' };
+  function pickTip(modes, avoid) {
+    var pool = TIP_LIST.filter(function (t) { return t && t.text && modes.indexOf(t.mode) >= 0; });
+    if (!pool.length) return '';
+    var rest = pool.filter(function (t) { return t.text !== avoid; });
+    var from = rest.length ? rest : pool;
+    return from[Math.floor(Math.random() * from.length)].text;
+  }
+  /* modes = 出してよいモード(例:['いつでも', '待ち'])。同じ画面の間は同じ一言を出し、10秒ごとに rotateTip が入れ替える */
+  function tipHtml(modes) {
+    var key = modes.join('|');
+    if (tipNow.key !== key || !tipNow.text) tipNow = { key: key, text: pickTip(modes, tipNow.text), modes: modes };
+    if (!tipNow.text) return '';
+    return '<div class="tip"><span class="tl">💡ひとこと</span><span class="tx" data-tip>' + esc(tipNow.text) + '</span></div>';
+  }
+  function rotateTip() {
+    var els = document.querySelectorAll('[data-tip]');
+    if (!els.length || !tipNow.modes) return;
+    tipNow.text = pickTip(tipNow.modes, tipNow.text);
+    for (var i = 0; i < els.length; i++) els[i].textContent = tipNow.text;
+  }
+  setInterval(function () { if (!document.hidden) rotateTip(); }, 10000);
   function rand(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
   function $(id) { return document.getElementById(id); }
 
@@ -465,6 +495,8 @@
       h += rankTable(st.sports, 'チーム順位(運動の点数)');
     }
     h += '<p class="note"><span class="mark">※仲良しポイントは、最後に発表!</span></p>';
+    /* ひとこと:待ち・休憩のもの。クイズが今か次の種目なら、クイズの前のものも */
+    h += tipHtml((cur + next).indexOf('クイズ') >= 0 ? ['いつでも', '待ち', 'クイズの前'] : ['いつでも', '待ち']);
     if (S.me && S.me.introDone) h += '<button type="button" class="btn sub" data-act="openIntro">自己紹介を見る・直す</button>';
     return h;
   };
@@ -579,7 +611,7 @@
         '<span class="big">' + esc(p.progress.predicted) + '<small style="font-size:22px">/' + esc(p.progress.arrived) + '人</small></span></div>';
       if (picked) h += '<p class="muted center small">みんなの予想は、締め切られたら人数だけ見られるよ</p>';
     }
-    return h;
+    return h + tipHtml(['いつでも', '予想']);
   };
 
   // ============ クイズ ============
@@ -781,13 +813,13 @@
 
   VIEWS.quiz = function () {
     var q = S.quiz;
-    if (!q || q.phase === 'loading') return hero('mixle_think', '名前、<br>覚えてる?') + spinner('問題を受け取っています…');
+    if (!q || q.phase === 'loading') return hero('mixle_think', '名前、<br>覚えてる?') + spinner('問題を受け取っています…', true);
     if (q.phase === 'done') return hero('mixle_think', 'おつかれさま!') + sentHtml();
     if (q.phase === 'loadErr') {
       return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">問題を受け取れませんでした</p>' +
         '<p class="muted">' + esc(q.err) + '</p><button type="button" class="btn" data-act="quizRetryStart">もう一度</button></div>';
     }
-    if (q.phase === 'sending') return hero('mixle_think', 'おつかれさま!') + spinner('送信中…');
+    if (q.phase === 'sending') return hero('mixle_think', 'おつかれさま!') + spinner('送信中…', true);
     if (q.phase === 'sendErr') {
       return hero('mixle_think', 'あれれ…') + '<div class="card center"><p class="msg">答えを送れませんでした</p>' +
         '<p class="muted">' + esc(q.err || NET_MSG) + '</p><p class="small">答えはこのスマホに残っているので大丈夫!</p>' +
@@ -1060,7 +1092,7 @@
     var h = myHeader() + hero('tsunaboru_excited', 'ドキドキ…!');
     h += '<div class="card center"><p class="h1" style="font-size:22px">結果発表を待ってね!</p><span class="squiggle"></span>' +
       '<p class="muted" style="margin:10px 0 0">発表が終わったら、ここにも結果が出るよ</p></div>';
-    return h + resultLinks();
+    return h + resultLinks() + tipHtml(['いつでも']);
   };
   function rankText(r) { return r ? esc(r) + '位' : '−'; }
   function pct1(n) { return n === null || n === undefined ? '−' : fmt(n) + '%'; }
@@ -1109,7 +1141,7 @@
     }
     h += img('celebration', 'celebrate', 'お祝い');
     h += '<p class="note">みんな、おつかれさま!</p>';
-    return h + resultLinks();
+    return h + resultLinks() + tipHtml(['結果公開']);
   };
 
   // ============ 操作 ============

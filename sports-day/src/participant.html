@@ -24,6 +24,8 @@
   <div id="toast" class="toast" hidden></div>
   <!-- サーバーが検証したチーム(A〜D か '')。scriptタグと同じ行に行コメントを書かない(GASが行末まで消し、閉じタグも消える) -->
   <script>var TEAM = '<?!= team ?>';</script>
+  <!-- 「ひとこと」(ひとことシートで「使う」に○があるもの)。[{ text, mode }] -->
+  <script>var TIPS = <?!= tips ?>;</script>
   <?!= include('assets') ?>
   <?!= include('participant_js') ?>
 </body>

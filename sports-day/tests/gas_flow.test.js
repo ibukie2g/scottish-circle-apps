@@ -51,7 +51,7 @@ function ok(res) {
 test('setup: シートと初期データ', () => {
   const { app, roster, ctx } = setupWorld();
   const names = app.getSheets().map(s => s.getName());
-  for (const n of ['状態', '参加者', '試合', '予想', 'クイズ問題', 'クイズ回答', '惜しい答え', 'お題カード', 'アンケート', '設定', '集計']) {
+  for (const n of ['状態', '参加者', '試合', '予想', 'クイズ問題', 'クイズ回答', '惜しい答え', 'お題カード', 'アンケート', '設定', '集計', 'ひとこと']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(app.getSheetByName('試合').getLastRow(), 19); // 見出し+18試合
