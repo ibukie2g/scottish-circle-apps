@@ -381,6 +381,25 @@ function computePredictionPoints(matches, predictions, settings) {
 }
 
 /**
+ * チームごとの、予想の的中率(確定した試合の合計。結果発表の内訳に使う)
+ * @return {Object<string, (number|null)>} 0〜1。予想した試合がまだ確定していない・予想者がいないチームは null
+ */
+function predictionTeamRates(matches, predictions) {
+  var ok = emptyTeamMap_(0);
+  var all = emptyTeamMap_(0);
+  (predictions || []).forEach(function (p) {
+    var m = findMatch_(matches || [], p.matchId);
+    var r = matchResult(m);
+    if (!r || r.draw || !(p.team in all) || p.team === m.team1 || p.team === m.team2) return;
+    all[p.team]++;
+    if (p.choice === r.winner) ok[p.team]++;
+  });
+  var out = {};
+  TEAMS.forEach(function (t) { out[t] = all[t] ? ok[t] / all[t] : null; });
+  return out;
+}
+
+/**
  * 1試合の予想の的中率(本番前の変更 2)。試合が確定(引き分け以外)していなければ null
  * @param {object} m 試合
  * @param {{team:string, choice:string}[]} predictions その試合の予想
@@ -424,7 +443,10 @@ function computeAll(input) {
   });
   var ranks = rankBy_(teams, 'total');
   teams.forEach(function (r) { r.totalRank = ranks[r.team]; });
-  return { teams: teams, detail: { sports: sports.detail, quiz: quiz } };
+  return {
+    teams: teams,
+    detail: { sports: sports.detail, quiz: quiz, predictionRates: predictionTeamRates(input.matches || [], input.predictions || []) }
+  };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -446,6 +468,7 @@ if (typeof module !== 'undefined' && module.exports) {
     computeOdaiPoints: computeOdaiPoints,
     computePredictionPoints: computePredictionPoints,
     predictionHitRates: predictionHitRates,
+    predictionTeamRates: predictionTeamRates,
     computeAll: computeAll
   };
 }

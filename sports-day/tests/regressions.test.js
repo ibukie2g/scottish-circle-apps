@@ -319,3 +319,47 @@ test('状態・集計・クイズの開始と送信で、全員分のキャッ�
  n=0;g.submitQuiz('P06',{names:[],origin:[]});assert.equal(n,1,'submitQuiz も自分の問題だけ読む');
  c.get=orig;
 });
+test('結果発表:チームの内訳(種目の順位・バレーの勝ちボーナス・クイズの点数と正答率・予想の的中率)と 👑 の名前',()=>{
+ const e=bigWorld(),g=e.ctx,t=e.token;
+ // バレー:A が準決勝と決勝に勝つ。予想は C(試合に出ないチーム)から
+ ['P01','P02','P03'].forEach(id=>g.selectSelf(id));
+ g.adminSetPredictionStatus(t,'V-SF1','受付中');
+ g.submitPrediction('P01','V-SF1','A');g.submitPrediction('P02','V-SF1','A');g.submitPrediction('P03','V-SF1','B');
+ g.adminSaveMatch(t,'V-SF1',25,20);g.adminSaveMatch(t,'V-SF2',10,25); // A・D が決勝へ
+ g.adminSaveMatch(t,'V-F',25,23);
+ ['B-R1-1','B-R1-2','B-R2-1','B-R2-2','B-R3-1','B-R3-2'].forEach(id=>g.adminSaveMatch(t,id,10,5));
+ // クイズ:P01 は来場している2人をフルネームで(👑👑)、P02 は名前だけで(👑)、P03 は1人だけ
+ g.adminStartQuiz(t);
+ g.submitQuiz('P01',{names:['見本 二','みほん 三'],origin:[]});
+ g.submitQuiz('P02',{names:['一','三'],origin:[]});
+ g.submitQuiz('P03',{names:['見本 一'],origin:[]});
+ const view=J(g.adminGetScores(t).data);
+ const A=view.teams.find(x=>x.team==='A').breakdown,C=view.teams.find(x=>x.team==='C');
+ assert.deepEqual([A.volleyScored,A.volleyWins,A.volleyBonus],[50,2,8]); // 25+25 点、2勝 × 4
+ assert.equal(view.teams.find(x=>x.team==='A').volleyball,58);
+ assert.equal(A.basketballRank,1);assert.equal(A.badmintonRank,null);assert.equal(A.dodgeballRank,null); // 確定していない種目は null
+ assert.equal(C.breakdown.predictionRate,66.7); // 3人中2人が的中
+ assert.equal(view.teams.find(x=>x.team==='A').breakdown.predictionRate,null);
+ // 名前:(1.2 + 0.6 + 0.5) ÷ 3 = 76.7% → 7 × 0.767 = 5.4点。出身地は全員0問
+ assert.equal(C.quizNameRate,76.7);assert.equal(C.breakdown.quizNamePoints,5.4);assert.equal(C.breakdown.quizOriginPoints,0);
+ assert.equal(C.quiz,5.4);
+ assert.deepEqual(view.crowns,{allFull:[{name:'見本 一',team:'C'}],complete:[{name:'見本 二',team:'C'}]});
+ // 参加者には、結果公開のあとだけ同じ内訳を返す
+ assert.equal(g.getState().data.results,null);
+ g.adminPublishResults(t);
+ const res=J(g.getState().data.results);
+ assert.deepEqual(res.crowns,view.crowns);
+ assert.deepEqual(res.teams.find(x=>x.team==='C').breakdown,C.breakdown);
+ // 👑 の名前はキャッシュから出す(状態を見るたびに名簿ファイルを開かない)
+ let opened=0;const orig=g.SpreadsheetApp.openById;g.SpreadsheetApp.openById=id=>{opened++;return orig(id);};
+ e.clock.advance(11000);g.getState();g.getState();g.SpreadsheetApp.openById=orig;
+ assert.equal(opened,0);
+});
+test('predictionTeamRates: 確定した試合の予想だけ数える',()=>{
+ const S=require('../src/core_score.js');
+ const ms=S.INITIAL_MATCHES.map(m=>Object.assign({score1:null,score2:null,status:'予定',predictionStatus:'なし'},m));
+ const sf1=ms.find(m=>m.id==='V-SF1');Object.assign(sf1,{score1:25,score2:10,status:'確定'}); // A 対 B、A の勝ち
+ const r=S.predictionTeamRates(ms,[{matchId:'V-SF1',team:'C',choice:'A'},{matchId:'V-SF1',team:'C',choice:'B'},{matchId:'V-SF1',team:'D',choice:'A'},
+  {matchId:'V-SF2',team:'A',choice:'C'},{matchId:'V-SF1',team:'A',choice:'A'}]); // V-SF2 は未確定、試合に出ているチームの予想は数えない
+ assert.deepEqual(r,{A:null,B:null,C:0.5,D:1});
+});

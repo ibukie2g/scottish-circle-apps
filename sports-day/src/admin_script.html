@@ -10,6 +10,7 @@
 
   var TEAMS = ['A', 'B', 'C', 'D'];
   var TEAM_MARK = { A: '🔴', B: '🔵', C: '🟡', D: '🟢' };
+  var TEAM_COLOR = { A: '赤', B: '青', C: '黄', D: '緑' };
   var SPORTS = [
     { key: 'バスケ', icon: '🏀' },
     { key: 'バド', icon: '🏸' },
@@ -434,7 +435,7 @@
     var st = S.ov.state;
     if (md === st.mode && md !== 'クイズ') return;
     if (md === 'クイズ') { confirmQuizStart(false); return; }
-    if (md === '結果公開') { confirmPublish(); return; }
+    if (md === '結果公開') { ACTIONS.publish(); return; }
     if (md === '予想' && !st.predictionMatchId) {
       showStatus('err', '予想する試合がまだ決まっていません。試合タブのバレーで「予想の受付を開始」を押してください');
       return;
@@ -449,19 +450,37 @@
   }
   ACTIONS.setMode = function (el) { setMode(el.getAttribute('data-mode'), el); };
   ACTIONS.goScores = function () { S.scoreView = 'sports'; switchTab('scores'); };
-  ACTIONS.publish = function () { confirmPublish(); };
   ACTIONS.logout = function () {
     confirmBox('ログアウトしますか？', 'もう一度パスワードを入れると戻れます。', 'ログアウト', function () { toLogin(''); });
   };
 
+  /* 公開の前に、入力もれがないか数を出す(足りなくても公開は止めない。P1-4) */
   function confirmPublish() {
-    confirmBox('結果を全員に公開しますか？', '全員のスマホに総合結果(仲良しポイントの内訳も)が出ます。読み上げが終わってから押してください。', '公開する', function () {
+    var ms = S.ov.matches || [];
+    var parts = S.ov.participants || [];
+    var done = ms.filter(function (m) { return m.status === '確定'; }).length;
+    var arrived = parts.filter(function (p) { return p.arrivedAt; }).length;
+    var answered = parts.filter(function (p) { return p.quizAnswered; }).length;
+    var pending = S.ov.pendingNearMisses || 0;
+    var odai = S.ov.odaiCount || 0;
+    var body = '全員のスマホに総合結果(仲良しポイントの内訳も)が出ます。読み上げが終わってから押してください。\n\n' +
+      (done < ms.length ? '⚠️ ' : '✓ ') + '試合の確定 ' + done + ' / ' + ms.length + '\n' +
+      (odai < 12 ? '⚠️ ' : '✓ ') + 'お題カードの入力 ' + odai + ' / 12\n' +
+      (answered < arrived ? '⚠️ ' : '✓ ') + 'クイズの回答 ' + answered + '人 / 来場 ' + arrived + '人\n' +
+      (pending ? '⚠️ ' : '✓ ') + 'まだ判断していない答え ' + pending + '件' +
+      (pending ? '(このまま公開すると×の扱いになります。公開のあとでも直せます)' : '') +
+      '\n\n足りないものがあっても公開できます。';
+    confirmBox('結果を全員に公開しますか？', body, '公開する', function () {
       api('adminPublishResults', [], {
         save: '公開中…', ok: '結果を公開しました',
         onOk: function (st) { S.ov.state = st; render(); }
       });
     }, true);
   }
+  ACTIONS.publish = function () {
+    /* 数は最新のものを出す(取り直してから確認を出す) */
+    loadOverview(function () { confirmPublish(); });
+  };
 
   // ---- 設定 ----
   function settingsForm() {
@@ -874,6 +893,9 @@
     if (stg.volleyball && !stg.volleyball.complete) warn.push('バレーは確定した試合の分だけ');
     if (warn.length) h += '<div class="note warn">⚠️ ' + esc(warn.join('/')) + '</div>';
 
+    // 読み上げ用の原稿(結果と同じデータから作る。通信は増やさない)
+    if (total) h += '<div class="card">' + det('script') + '<summary>📜 読み上げ用の原稿(4位から)</summary>' + scriptHtml(sc) + '</details></div>';
+
     // 内訳の表
     h += '<div class="card"><h2>内訳</h2><table class="bd"><thead><tr><th></th>';
     TEAMS.forEach(function (t) { h += '<th>' + teamChip(t) + '</th>'; });
@@ -890,7 +912,13 @@
       h += '</tr>';
     });
     if (total) {
-      h += '<tr><td class="sub">名前の正答率</td>';
+      h += '<tr><td class="sub">クイズ:名前の点</td>';
+      TEAMS.forEach(function (t) { h += '<td class="sub">' + fmt1((teamRow(sc.teams, t).breakdown || {}).quizNamePoints) + '</td>'; });
+      h += '</tr><tr><td class="sub">クイズ:出身地の点</td>';
+      TEAMS.forEach(function (t) { h += '<td class="sub">' + fmt1((teamRow(sc.teams, t).breakdown || {}).quizOriginPoints) + '</td>'; });
+      h += '</tr><tr><td class="sub">予想の的中率</td>';
+      TEAMS.forEach(function (t) { h += '<td class="sub">' + pct((teamRow(sc.teams, t).breakdown || {}).predictionRate) + '</td>'; });
+      h += '</tr><tr><td class="sub">名前の正答率</td>';
       TEAMS.forEach(function (t) { h += '<td class="sub">' + pct(teamRow(sc.teams, t).quizNameRate) + '</td>'; });
       h += '</tr><tr><td class="sub">出身地の正答率</td>';
       TEAMS.forEach(function (t) { h += '<td class="sub">' + pct(teamRow(sc.teams, t).quizOriginRate) + '</td>'; });
@@ -908,6 +936,44 @@
       h += '<button class="btn block big accent" data-act="scoreView" data-v="total">② 仲良しポイント込みへ ▶</button>';
     }
     el.innerHTML = h;
+  }
+  /** 読み上げのときの一言(そのチームのいちばん目立つところ)。データから機械的に選ぶので、読む前に確かめる */
+  function teamComment(t, teams) {
+    var b = t.breakdown || {};
+    function top(get) {
+      var mine = get(t);
+      if (mine === null || mine === undefined || !(mine > 0)) return false;
+      return teams.every(function (x) { var v = get(x); return x.team === t.team || v === null || v === undefined || v < mine; });
+    }
+    var out = [];
+    if (t.sportsRank > t.totalRank) out.push('仲良しポイントで逆転!');
+    if (top(function (x) { return x.nakayoshiTotal; })) out.push('仲良しポイントは' + fmt1(t.nakayoshiTotal) + '点でトップ');
+    var firsts = [];
+    if (b.basketballRank === 1) firsts.push('バスケ');
+    if (b.badmintonRank === 1) firsts.push('バド');
+    if (b.dodgeballRank === 1) firsts.push('ドッジ');
+    if (top(function (x) { return x.volleyball; })) firsts.push('バレー');
+    if (firsts.length) out.push(firsts.join('・') + 'が1位');
+    if (top(function (x) { return x.quizNameRate; })) out.push('名前クイズの正答率がいちばん(' + pct(t.quizNameRate) + ')');
+    if (top(function (x) { return (x.breakdown || {}).predictionRate; })) out.push('予想の的中率がいちばん(' + pct(b.predictionRate) + ')');
+    if (top(function (x) { return x.odai; })) out.push('お題カードがいちばんそろった');
+    return out.length ? out.slice(0, 2).join('、') : '最後までナイスファイト!';
+  }
+  function scriptHtml(sc) {
+    var h = '<div class="script">';
+    sc.totalRanking.slice().reverse().forEach(function (r) {
+      var t = teamRow(sc.teams, r.team);
+      h += '<p><b>第' + r.rank + '位</b> ' + teamChip(r.team) + ' ' + esc(r.team) + 'チーム(' + TEAM_COLOR[r.team] + ')<b class="pt">' + fmt1(r.points) + '点</b><br>' +
+        '<span class="sub">運動 ' + fmt1(t.sportsTotal) + '点 + 仲良しポイント ' + fmt1(t.nakayoshiTotal) + '点</span><br>' +
+        '一言:' + esc(teamComment(t, sc.teams)) + '</p>';
+    });
+    var cr = sc.crowns || {};
+    var names = function (list) { return list.map(function (p) { return esc(p.name) + ' さん(' + esc(p.team) + ')'; }).join('、'); };
+    if (cr.allFull && cr.allFull.length) h += '<p><b>👑👑 チーム全員をフルネームで書けた人</b><br>' + names(cr.allFull) + '</p>';
+    if (cr.complete && cr.complete.length) h += '<p><b>👑 チーム全員を書けた人</b><br>' + names(cr.complete) + '</p>';
+    if (!(cr.allFull && cr.allFull.length) && !(cr.complete && cr.complete.length)) h += '<p class="sub">👑 全員を書けた人は、まだいません</p>';
+    h += '<p class="sub">同点のチームは同じ順位です。一言はデータから自動で選んでいるので、読む前に目を通してください。</p>';
+    return h + '</div>';
   }
   function sportsStandingsHtml(stg) {
     var h = det('standings', 'margin-top:8px') + '<summary>種目ごとの成績</summary>';

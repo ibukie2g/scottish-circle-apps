@@ -290,7 +290,8 @@ function buildScores_(fresh) {
   var parts = readParticipants_(fresh);
   var byId = {};
   parts.forEach(function (p) { byId[p.id] = p; });
-  var quizAnswers = readQuizAnswers_(fresh).filter(function (a) { return byId[a.participantId]; }).map(function (a) {
+  var answers = readQuizAnswers_(fresh).filter(function (a) { return byId[a.participantId]; });
+  var quizAnswers = answers.map(function (a) {
     var p = byId[a.participantId];
     return { team: p.team, include: p.quizInclude, nameRate: a.nameRate, originCorrect: a.originCorrect, originTotal: a.originTotal };
   });
@@ -301,7 +302,21 @@ function buildScores_(fresh) {
     odai: readOdai_(fresh),
     predictions: readPredictions_(fresh)
   });
-
+  // 👑👑 全員フルネーム、👑 全員コンプリート(0.5人分を含めて全員)の人。ここでは参加者IDだけ(名前は resultsView_ で付ける)
+  var questions = readQuizQuestions_(fresh);
+  var crowns = { allFull: [], complete: [] };
+  answers.forEach(function (a) {
+    var q = findBy_(questions, a.participantId);
+    if (!q) return;
+    var credits = {};
+    a.halfIds.forEach(function (id) { credits[id] = 0.5; });
+    a.correctIds.forEach(function (id) { credits[id] = 1; });
+    var s = summarizeCredits(credits, q.nameTargets);
+    var who = { id: a.participantId, team: byId[a.participantId].team };
+    if (s.allFull) crowns.allFull.push(who);
+    else if (s.complete) crowns.complete.push(who);
+  });
+  result.detail.crowns = crowns;
   return result;
 }
 

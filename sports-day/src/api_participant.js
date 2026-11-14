@@ -60,17 +60,67 @@ function quizTiming_(st, settings) {
   };
 }
 
-/** 結果(総合と内訳) */
+/**
+ * 結果(総合と内訳)。参加者の結果公開と、運営の順位タブ・読み上げ原稿で同じものを使う
+ * teams[i].breakdown = 種目ごとの順位、バレーの点数と勝ちボーナス、名前・出身地クイズの点数、予想の的中率
+ * crowns = 全員フルネーム・全員コンプリートの人の名前
+ */
 function resultsView_(scores) {
+  var sp = scores.detail.sports;
+  var rates = scores.detail.predictionRates || {};
+  var pc = function (x) { return x === null || x === undefined ? null : round1(x * 100); };
+  // 総当たり(バスケ・ドッジ)の順位は、全試合が確定してから
+  var leagueRank = function (st, team) {
+    if (!st || !st.complete) return null;
+    var hit = st.standings.filter(function (s) { return s.team === team; })[0];
+    return hit ? hit.rank : null;
+  };
   return {
     teams: scores.teams.map(function (t) {
       var q = scores.detail.quiz[t.team] || {};
+      var scored = sp.volleyball.scored[t.team] || 0;
       return Object.assign({}, t, {
-        quizNameRate: q.nameAvg === null || q.nameAvg === undefined ? null : round1(q.nameAvg * 100),
-        quizOriginRate: q.originRate === null || q.originRate === undefined ? null : round1(q.originRate * 100)
+        quizNameRate: pc(q.nameAvg),     // チームの名前の平均正答率(%)。ボーナス込みで100を超えることがある
+        quizOriginRate: pc(q.originRate),
+        breakdown: {
+          basketballRank: leagueRank(sp.basketball, t.team),
+          badmintonRank: sp.badminton.ranks[t.team] || null,
+          dodgeballRank: leagueRank(sp.dodgeball, t.team),
+          volleyScored: scored,                                // バレーで取った点数
+          volleyWins: sp.volleyball.wins[t.team] || 0,
+          volleyBonus: round1(t.volleyball - scored),          // 勝ちボーナスの合計
+          quizNamePoints: q.namePoints || 0,
+          quizOriginPoints: q.originPoints || 0,
+          predictionRate: pc(rates[t.team])                    // 予想の的中率(%)。予想なしは null
+        }
       });
-    })
+    }),
+    crowns: crownsView_(scores.detail.crowns)
   };
+}
+
+/**
+ * 👑 の人に名前を付ける。結果公開のあとは全員が4秒ごとに読むので、名簿ファイルを開き直さないように、
+ * 名前の組をキャッシュに6時間置く(👑 の人が変わったときだけ名簿を読む)
+ */
+function crownsView_(crowns) {
+  crowns = crowns || { allFull: [], complete: [] };
+  var ids = crowns.allFull.concat(crowns.complete).map(function (x) { return x.id; });
+  if (!ids.length) return { allFull: [], complete: [] };
+  var key = ids.join(',');
+  var cached = cacheGetJson_('crownNames:v1');
+  var names = cached && cached.key === key ? cached.names : null;
+  if (!names) {
+    var people = readPeople_();
+    names = {};
+    ids.forEach(function (id) { names[id] = displayName_(people, id); });
+    cachePutJson_('crownNames:v1', { key: key, names: names }, NEAR_CACHE_SEC);
+  }
+  var view = function (list) {
+    return list.map(function (x) { return { name: names[x.id] || x.id, team: x.team }; })
+      .sort(function (a, b) { return a.team < b.team ? -1 : (a.team > b.team ? 1 : 0); });
+  };
+  return { allFull: view(crowns.allFull), complete: view(crowns.complete) };
 }
 
 // ============ 名前を選ぶ ============

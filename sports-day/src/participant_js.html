@@ -125,6 +125,7 @@
     quiz: null,                    // { key, phase, data, names, origin, result, err, needRestart }
     review: null,                  // { loading, err, answered, surveyDone, availableAt, result }
     survey: null,                  // アンケートの入力内容(freshSurvey の形)
+    openRes: {},                   // 結果発表で内訳を開いているチーム(チーム → true/false。未設定なら自分のチームだけ開く)
     lastView: '', lastHtml: '', banner: ''
   };
   if (S.me && S.me.id !== S.pid) S.me = null;
@@ -1061,18 +1062,51 @@
       '<p class="muted" style="margin:10px 0 0">発表が終わったら、ここにも結果が出るよ</p></div>';
     return h + resultLinks();
   };
+  function rankText(r) { return r ? esc(r) + '位' : '−'; }
+  function pct1(n) { return n === null || n === undefined ? '−' : fmt(n) + '%'; }
+  /* チームの内訳:種目ごとの順位と点数、クイズ・お題カード・予想の点数と率 */
+  function breakdownHtml(t) {
+    var b = t.breakdown || {};
+    function row(label, note, pts) {
+      return '<div class="bk-row"><span class="l">' + label + '</span><span class="n">' + note + '</span><span class="p">' + fmt(pts) + '<small>点</small></span></div>';
+    }
+    var h = '<div class="bk"><div class="bk-h">運動 ' + fmt(t.sportsTotal) + '点</div>';
+    h += row('バスケ', rankText(b.basketballRank), t.basketball);
+    h += row('バド', rankText(b.badmintonRank), t.badminton);
+    h += row('ドッジ', rankText(b.dodgeballRank), t.dodgeball);
+    h += row('バレー', '取った点 ' + fmt(b.volleyScored) + ' + 勝ちボーナス ' + fmt(b.volleyBonus) + '(' + esc(b.volleyWins || 0) + '勝)', t.volleyball);
+    h += '<div class="bk-h">仲良しポイント ' + fmt(t.nakayoshiTotal) + '点</div>';
+    h += row('名前クイズ', '正答率 ' + pct1(t.quizNameRate), b.quizNamePoints);
+    h += row('出身地クイズ', '正答率 ' + pct1(t.quizOriginRate), b.quizOriginPoints);
+    h += row('お題カード', '', t.odai);
+    h += row('勝敗予想', '的中率 ' + pct1(b.predictionRate), t.prediction);
+    return h + '</div>';
+  }
   VIEWS.results = function () {
     var res = (S.state && S.state.results) || { teams: [] };
     var rows = res.teams.slice().sort(function (a, b) { return (a.totalRank - b.totalRank) || (a.team < b.team ? -1 : 1); });
     var h = '<div class="hero">' + img('tsunaboru_joy', '', '') + '<span class="ribbon">結果発表!</span></div>';
     rows.forEach(function (t) {
+      var mine = !!(S.me && t.team === S.me.team);
+      var open = t.team in S.openRes ? S.openRes[t.team] : mine; /* 自分のチームは最初から開く */
       var crown = t.totalRank <= 3 ? '<span class="crown' + (t.totalRank === 1 ? '' : ' c' + t.totalRank) + '"></span>' : '';
-      h += '<div class="res' + (t.totalRank === 1 ? ' first' : '') + (S.me && t.team === S.me.team ? ' me' : '') + '">' +
-        '<div class="top"><span class="rk">' + crown + esc(t.totalRank) + '<small>位</small></span>' + teamPill(t.team) +
-        '<span class="tot">' + fmt(t.total) + '<small>点</small></span></div>' +
+      h += '<div class="res' + (t.totalRank === 1 ? ' first' : '') + (mine ? ' me' : '') + '">' +
+        '<button type="button" class="top" data-act="toggleRes" data-team="' + esc(t.team) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+        '<span class="rk">' + crown + esc(t.totalRank) + '<small>位</small></span>' + teamPill(t.team) +
+        '<span class="tot">' + fmt(t.total) + '<small>点</small></span><span class="chev">' + (open ? '▴' : '▾') + '</span></button>' +
         '<div class="bd"><span>運動 ' + fmt(t.sportsTotal) + '点</span><span>仲良し ' + fmt(t.nakayoshiTotal) + '点</span></div>' +
-        '<div class="bd2">仲良しの内訳:クイズ ' + fmt(t.quiz) + '・お題カード ' + fmt(t.odai) + '・勝敗予想 ' + fmt(t.prediction) + '</div></div>';
+        (open ? breakdownHtml(t) : '<div class="bd2">タップすると内訳が見られるよ</div>') + '</div>';
     });
+    var cr = res.crowns || {};
+    function crownList(list) {
+      return '<div class="crown-names">' + list.map(function (p) { return '<span>' + teamPill(p.team) + ' ' + esc(p.name) + ' さん</span>'; }).join('') + '</div>';
+    }
+    if ((cr.allFull && cr.allFull.length) || (cr.complete && cr.complete.length)) {
+      h += '<div class="card center"><div class="h3"><span class="spark">名前クイズの達人</span></div>';
+      if (cr.allFull && cr.allFull.length) h += '<p class="crown-ttl">👑👑 チーム全員をフルネームで書けた!</p>' + crownList(cr.allFull);
+      if (cr.complete && cr.complete.length) h += '<p class="crown-ttl">👑 チーム全員を書けた!</p>' + crownList(cr.complete);
+      h += '</div>';
+    }
     h += img('celebration', 'celebrate', 'お祝い');
     h += '<p class="note">みんな、おつかれさま!</p>';
     return h + resultLinks();
@@ -1156,6 +1190,12 @@
     originSend: function () { var q = S.quiz; if (q && q.phase === 'origin') submitQuiz(); },
     quizResend: function () { retrySubmit(); },
     openReview: function () { openReview(); },
+    toggleRes: function (el) {
+      var t = el.getAttribute('data-team');
+      var open = t in S.openRes ? S.openRes[t] : !!(S.me && S.me.team === t);
+      S.openRes[t] = !open;
+      render(true);
+    },
     openSurvey: function () {
       if (surveyDone()) { if (S.pid) openReview(); else { S.sub = 'thanks'; render(true); } return; }
       S.sub = 'survey'; S.survey.err = ''; render(true);

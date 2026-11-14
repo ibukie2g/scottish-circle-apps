@@ -69,6 +69,7 @@ function adminGetOverview(token) {
       matches: readMatches_(true).map(matchView_),
       settings: settingsRows_(),
       pendingNearMisses: readNearMisses_(true).filter(function (n) { return n.judgement === JUDGE_PENDING; }).length,
+      odaiCount: readOdai_(true).filter(function (o) { return o.number >= 1 && o.number <= 3; }).length, // お題カードの入力済みの数(3枚×4チーム=12)
       unsplitNames: countUnsplitNames_(), // 名簿の名前が「名字 名前」と空白で分かれていない人数
       serverNow: Date.now()
     };
@@ -554,8 +555,10 @@ function adminGetScores(token) {
     writeSummary_(r); // 集計シートも最新にする(運営の端末からだけ呼ばれるので、ロックなしで書く)
     var bySports = r.teams.slice().sort(function (a, b) { return a.sportsRank - b.sportsRank || (a.team < b.team ? -1 : 1); });
     var byTotal = r.teams.slice().sort(function (a, b) { return a.totalRank - b.totalRank || (a.team < b.team ? -1 : 1); });
+    var view = resultsView_(r);
     return {
-      teams: resultsView_(r).teams,
+      teams: view.teams,   // breakdown(内訳)付き。参加者の結果公開と同じもの
+      crowns: view.crowns, // 👑👑 全員フルネーム、👑 全員コンプリートの人の名前(読み上げ原稿に使う)
       sportsRanking: bySports.map(function (t) { return { team: t.team, rank: t.sportsRank, points: t.sportsTotal }; }),
       totalRanking: byTotal.map(function (t) { return { team: t.team, rank: t.totalRank, points: t.total }; }),
       standings: {

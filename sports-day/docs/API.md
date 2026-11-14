@@ -96,14 +96,25 @@ data = {
         basketball, badminton, dodgeball, volleyball, sportsTotal, sportsRank,
         quiz: 5.7, odai: 3.1, prediction: 1.3, nakayoshiTotal: 10.1,
         total: 59.1, totalRank: 1,
-        quizNameRate: 66.7 | null,   // チームの名前の平均正答率(%)。回答者なしは null
-        quizOriginRate: 33.3 | null  // チームの出身地の正答率(%)
+        quizNameRate: 76.7 | null,   // チームの名前の平均正答率(%)。ボーナス込みで100を超えることがある。回答者なしは null
+        quizOriginRate: 33.3 | null, // チームの出身地の正答率(%)= 正解数の合計 ÷ 問題数の合計
+        breakdown: {                 // タップで開く内訳(2026-11-13)
+          basketballRank: 1 | null, badmintonRank: 2 | null, dodgeballRank: 3 | null, // 種目ごとの順位(決まっていなければ null)
+          volleyScored: 50, volleyWins: 2, volleyBonus: 8, // バレー:取った点数、勝った数、勝ちボーナスの合計(volleyball = volleyScored + volleyBonus)
+          quizNamePoints: 5.4, quizOriginPoints: 1,        // quiz の内訳
+          predictionRate: 66.7 | null                      // 予想の的中率(%)。予想なしは null
+        }
       }, ...
-    ]
+    ],
+    crowns: {                        // 名前クイズで全員を書けた人(紹介する)
+      allFull: [ { name: '斎藤 花子', team: 'A' }, ... ],  // 👑👑 チーム全員をフルネームで書けた
+      complete: [ { name: '渡辺 太郎', team: 'B' }, ... ]  // 👑 チーム全員を書けた(0.5人分を含む。allFull の人は入らない)
+    }
   }
 }
 ```
 - 点数はすべて小数第1位まで。順位は同点なら同じ数(1,1,3,4)
+- 結果公開の画面:チームをタップすると内訳が開く(自分のチームは最初から開く)。種目ごとの順位と点数(バレーは取った点+勝ちボーナス)、名前クイズ・出身地クイズの点数と正答率、お題カード、勝敗予想の点数と的中率。その下に 👑👑・👑 の人の名前
 - 待ち画面:`currentEvent`/`nextEvent` と `sports`。「※仲良しポイントは、最後に発表!」を添える
 - **点数を隠す**(2026-11-13):バレーの準決勝2試合が確定したら `sportsHidden: true`・`sports: null` になり、参加者向けのどの関数も運動の点数・順位・試合の点数を返さない。待ち画面は「ここからの点数はひみつ!」。結果公開で `results` に出る
 - バスケ・ドッジの順位点は全試合が確定するまで0、バドは決勝・3位決定戦が確定したところから入る
@@ -345,6 +356,7 @@ data = {
   matches: [ { id, sport, round, team1, team2, score1, score2, status, predictionStatus, related }, ... ], // 18試合
   settings: [ { key: '順位点', value: '10,7,4,2', description: '...' }, ... ],
   pendingNearMisses: 2, // 運営がまだ判断していない答えの数
+  odaiCount: 8,         // お題カードの入力済みの数(3枚×4チーム = 12 で全部)
   unsplitNames: 0,      // 名簿の名前が「名字 名前」と空白で分かれていない人数(名前だけ・名字だけの判定が使えない)
   serverNow: ms
 }
@@ -512,7 +524,8 @@ data = { id: 'P05', updated: ['チーム'] }
 data = {
   teams: [ { team, basketball, badminton, dodgeball, volleyball, sportsTotal, sportsRank,
              quiz, odai, prediction, nakayoshiTotal, total, totalRank,
-             quizNameRate, quizOriginRate }, ... ],              // A〜D の順
+             quizNameRate, quizOriginRate, breakdown: { ... } }, ... ], // A〜D の順。getState().results.teams と同じ形
+  crowns: { allFull: [ { name, team } ], complete: [ { name, team } ] }, // getState().results.crowns と同じ
   sportsRanking: [ { team: 'A', rank: 1, points: 49 }, ... ],    // 運動だけの順位(仲良しポイントを足す前)
   totalRanking: [ { team: 'C', rank: 1, points: 60.2 }, ... ],   // 仲良しポイント込みの順位
   standings: {
@@ -524,9 +537,11 @@ data = {
 }
 ```
 - 読み上げ:`sportsRanking` →(仲良しポイントの内訳)→ `totalRanking` の順に見せる。4位から出すなら配列を逆から
+- **読み上げ用の原稿**(順位タブの「② 仲良しポイント込み」):`totalRanking` を4位から並べ、点数・運動と仲良しの内訳・一言(そのチームでいちばん目立つところを画面側で選ぶ)、最後に `crowns` の名前。このデータだけで作り、通信は増やさない
 
 ### adminPublishResults(token)
 結果を全員のスマホに公開する(mode を '結果公開' に)。`data = (state)`
+- 押す前の確認画面に、adminGetOverview の値から「試合の確定数/18、お題カードの入力数/12、クイズの回答数/来場人数、まだ判断していない答えの件数」を出す。判断していない答えは、公開のときに×の扱いになる(公開後も直せる)ことも書く。足りなくても公開は止めない
 
 ### adminGetSettings(token) / adminSaveSettings(token, values)
 配点・制限時間の変更。
