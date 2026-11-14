@@ -121,12 +121,16 @@ test('直接修正の10秒反映・予想リセット・集計読み取りから
  e.clock.advance(10001);g.getState();assert.equal(match(e,'V-F').team1,'B');assert.equal(match(e,'V-F').score1,null);
 });
 test('正しい出身地だけ採点し、キャッシュ消失後も再送は名前の結果を保持',()=>{
- const e=world(),g=e.ctx;g.adminStartQuiz(e.token);const q=g.cacheGetJson_('origin:P01');
- assert.equal(g.submitQuiz('P01',{names:[],origin:q.answer}).ok,true);
- assert.equal(myResult(e,'P01').origin.correct,true);
+ const e=world(),g=e.ctx;g.adminStartQuiz(e.token);const q=g.cacheGetJson_('origin:P01').questions;
+ assert.equal(q.length,2); // チームメイト2人 → B が2問
+ assert.equal(g.submitQuiz('P01',{names:[],origin:[q[0].answer,'選択肢にない文字列']}).ok,true);
+ const o=myResult(e,'P01').origin;assert.equal(o.correct,1);assert.equal(o.total,2);
+ assert.equal(o.questions[0].correct,true);assert.equal(o.questions[1].yourAnswer,''); // 選択肢にない答えは残さない
  e.cache.store.clear();const result=g.getQuizResult('P01');assert.equal(result.ok,true);assert.equal(result.data.result.origin,null);
  assert.equal(g.submitQuiz('P01',{names:['偽入力'],origin:'別の入力'}).data.accepted,true);
  assert.equal(g.getQuizResult('P01').data.result.correctCount,0);
+ // 点数はシートに残っているので、問題のキャッシュが消えても集計は変わらない
+ const a=g.readQuizAnswers_(true).find(x=>x.participantId==='P01');assert.equal(a.originCorrect,1);assert.equal(a.originTotal,2);
 });
 test('ふだんの状態取得と予想の取得ではロックを取らない(30人同時の負荷対策)',()=>{
  const e=world(),g=e.ctx;g.selectSelf('P01');g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
@@ -242,4 +246,49 @@ test('名簿の名前が空白で分かれていない人数を、運営画面�
  const form=e.roster.getSheetByName('フォームの回答 1');form.data[1][0]='架空一';g.invalidateRoster_();
  assert.equal(g.adminGetOverview(t).data.unsplitNames,1);
  assert.equal(g.adminImportRoster(t).data.unsplitNames,1);
+});
+// 6人チーム(全員架空)。出身地:宮城2・東京1・新潟1・福島2
+function bigWorld() {
+ const e=loadGas({props:{ROSTER_SPREADSHEET_ID:'r',ADMIN_PASSWORD:'pw'}}), g=e.ctx;
+ const origins=['宮城県','宮城県','東京都','新潟県','福島県','福島県'];
+ e.roster.insertSheet('フォームの回答 1').data=[['フルネーム(漢字)','フルネーム(ひらがな)','出身地(都道府県)','チーム'], ...['一','二','三','四','五','六'].map((x,i)=>['見本 '+x,'みほん '+x,origins[i],'C'])];
+ g.setup(); e.token=g.adminLogin('pw').data.token; g.adminImportRoster(e.token); return e;
+}
+test('出身地クイズ:3問(B と C)を出し、C は人数ぶん選んでぴったりなら正解。問題・答えはシートに書かない',()=>{
+ const e=bigWorld(),g=e.ctx;g.adminStartQuiz(e.token);
+ assert.equal(g.getState().data.quiz.originSeconds,60);
+ const view=g.startQuiz('P01').data.origin.questions;
+ assert.equal(view.length,3);
+ const c=view.find(x=>x.type==='C');
+ assert.ok(c,'C が1問ある');assert.equal(c.choices.length,4);assert.ok(c.count>=1&&c.count<=3);
+ assert.ok(c.choices.every(x=>/^P0\d$/.test(x.id)&&x.name.startsWith('見本 ')));
+ assert.ok(!JSON.stringify(view).includes('answer')); // 正解は画面に返さない
+ const qs=g.cacheGetJson_('origin:P01').questions;
+ // C は正解、B は1問だけ正解にして送る
+ let wrongOne=false;
+ const ans=qs.map(x=>{ if(x.type==='C')return x.answerIds.slice().reverse(); if(!wrongOne){wrongOne=true;return x.choices.find(p=>p!==x.answer);} return x.answer; });
+ assert.equal(g.submitQuiz('P01',{names:[],origin:ans}).ok,true);
+ const sh=e.app.getSheetByName('クイズ回答'),h=sh.data[0],row=sh.data.find(r=>r[0]==='P01');
+ assert.deepEqual([row[h.indexOf('出身地の正誤')],row[h.indexOf('出身地の問題数')],row[h.indexOf('出身地の回答')]],[2,3,'']);
+ const dump=JSON.stringify(e.app.getSheets().map(s=>s.data));
+ for(const word of ['宮城県','東京都','新潟県','福島県','見本'])assert.ok(!dump.includes(word),word);
+ const o=myResult(e,'P01').origin;
+ assert.deepEqual([o.correct,o.total],[2,3]);
+ const rc=o.questions.find(x=>x.type==='C');
+ assert.equal(rc.correct,true);assert.deepEqual(J(rc.yourNames).sort(),J(rc.answerNames).sort());
+ assert.equal(o.questions.filter(x=>x.type==='B'&&x.correct).length,1);
+ // 時間切れ(何も選ばずに送る)は0問正解。チームの正答率 = 正解数の合計 ÷ 問題数の合計 = 2/6
+ g.startQuiz('P02');assert.equal(g.submitQuiz('P02',{names:[],origin:[]}).ok,true);
+ const st=g.adminGetQuizStatus(e.token).data.teams.find(t=>t.team==='C');
+ assert.equal(st.originRate,33.3);
+});
+test('前の形のシート(出身地の正誤が TRUE/FALSE)も集計できる',()=>{
+ const g=require('../src/core_score.js');
+ const q=g.computeQuizPoints([
+  {team:'A',nameRate:1.2,originCorrect:2,originTotal:3},{team:'A',nameRate:0.8,originCorrect:0,originTotal:3},
+  {team:'A',nameRate:null,originCorrect:null,originTotal:0},
+  {team:'B',nameRate:1,originCorrect:true},{team:'B',nameRate:0,originCorrect:false}],g.DEFAULT_SETTINGS);
+ assert.equal(q.A.originRate,2/6);assert.equal(q.A.originPoints,1);assert.equal(q.A.namePoints,7); // 平均 (1.2+0.8)/2 = 1.0 → 7点
+ assert.equal(q.A.points,8);
+ assert.equal(q.B.originRate,0.5);assert.equal(q.B.points,5);
 });

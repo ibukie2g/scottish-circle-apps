@@ -287,27 +287,40 @@ function generateQuestion_(pid, parts, people) {
   var arrived = mates.filter(function (p) { return p.arrivedAt !== null; });
   // だれも来場記録がない(来場の記録を使っていない)ときは、チーム全員を対象にする
   var targets = arrived.length ? arrived : mates;
-  var withOrigin = targets.filter(function (p) { return people[p.id] && normalizePrefecture(people[p.id].origin); });
-  var q = { participantId: pid, nameTargets: targets.map(function (p) { return p.id; }), originTarget: '', choices: [], answer: '' };
-  if (withOrigin.length) {
-    var target = withOrigin[Math.floor(Math.random() * withOrigin.length)];
-    var allOrigins = parts.map(function (p) { return people[p.id] ? people[p.id].origin : ''; });
-    var oc = makeOriginChoices(people[target.id].origin, allOrigins);
-    if (oc) {
-      q.originTarget = target.id;
-      q.choices = oc.choices;
-      q.answer = oc.answer;
-    }
-  }
-  return q;
+  var allOrigins = parts.map(function (p) { return people[p.id] ? people[p.id].origin : ''; });
+  return {
+    participantId: pid,
+    nameTargets: targets.map(function (p) { return p.id; }),
+    // 出身地クイズ3問(B「〇〇さんの出身は?」と C「〇〇県出身はだれ?」)。対象は名前と同じチームメイト
+    originQuestions: makeOriginQuiz(targets.map(function (p) {
+      return { id: p.id, origin: people[p.id] ? people[p.id].origin : '' };
+    }), allOrigins)
+  };
 }
 
 function questionRow_(q) {
-  if (!q.originExpired) cachePutJson_('origin:' + q.participantId, {originTarget:q.originTarget, choices:q.choices, answer:q.answer}, NEAR_CACHE_SEC);
+  // 出身地の問題(対象者・選択肢・正解)はシートに書かず、キャッシュにだけ置く
+  if (!q.originExpired) cachePutJson_('origin:' + q.participantId, { questions: q.originQuestions }, NEAR_CACHE_SEC);
   return {
     '参加者ID': q.participantId, '名前の対象者ID': q.nameTargets.join(','), '出身地の対象者ID': '',
     '選択肢1': '', '選択肢2': '', '選択肢3': '', '選択肢4': '',
     '正解': ''
+  };
+}
+
+/** 画面に返す出身地クイズの問題(正解は入れない)。問題がなければ null */
+function originQuestionsView_(questions, people) {
+  if (!questions || !questions.length) return null;
+  return {
+    questions: questions.map(function (x) {
+      if (x.type === 'C') {
+        return {
+          type: 'C', pref: x.pref, count: x.answerIds.length,
+          choices: x.choices.map(function (id) { return { id: id, name: displayName_(people, id) }; })
+        };
+      }
+      return { type: 'B', targetName: displayName_(people, x.targetId), choices: x.choices };
+    })
   };
 }
 
@@ -356,10 +369,7 @@ function startQuiz(participantId) {
       timing: st.quizStartedAt ? quizTiming_(st, settings) : null,
       serverNow: Date.now(),
       names: { count: q.nameTargets.length, hints: hints },
-      origin: q.originTarget ? {
-        targetName: displayName_(people, q.originTarget),
-        choices: q.choices
-      } : null
+      origin: originQuestionsView_(q.originQuestions, people)
     };
   });
 }
@@ -386,7 +396,8 @@ function findBy_(rows, pid) {
 /**
  * クイズの回答(最後に1回まとめて)
  * @param {string} participantId
- * @param {{names: string[], origin: string}} answers origin は選んだ都道府県名(時間切れなら '')
+ * @param {{names: string[], origin: Array}} answers origin は出身地クイズの答え(問題と同じ順番)。
+ *   B は選んだ都道府県名、C は選んだ人の参加者IDの配列。選んでいない問題は '' か []
  * @return {{accepted:true, surveyDone:boolean}} 答え合わせは返さない。アンケートを送ってから getQuizResult で受け取る
  */
 function submitQuiz(participantId, answers) {
@@ -396,7 +407,7 @@ function submitQuiz(participantId, answers) {
     var names = (Array.isArray(answers.names) ? answers.names : []).slice(0, 60).map(function (s) {
       return toStr_(s).slice(0, 40);
     });
-    var originAns = toStr_(answers.origin);
+    var originAns = Array.isArray(answers.origin) ? answers.origin.slice(0, 10) : [answers.origin];
     // 締め切りで全員が同時に送るので、ロックは取らない。
     // 回答は自分専用の行に書く(読むときは同じ人の最初の行を使う)
     var st = readState_(true);
@@ -417,14 +428,15 @@ function submitQuiz(participantId, answers) {
       return { id: id, name: p.name || '', kana: p.kana || '', nickname: intros[id] ? intros[id].nickname : '' };
     });
     var j = judgeNames(names, members);
-    var originCorrect = '';
-    if (q.originTarget) originCorrect = q.choices.indexOf(originAns) >= 0 && originAns === q.answer;
-    cachePutJson_('originResponse:' + pid, {answer: q.choices.indexOf(originAns) >= 0 ? originAns : ''}, NEAR_CACHE_SEC);
+    // 出身地:1問1点。選択肢にある答えだけ採点し、選んだ答えはキャッシュにだけ置く(シートには正解数と問題数だけ)
+    var os = scoreOriginAnswers(q.originQuestions, originAns);
+    cachePutJson_('originResponse:' + pid, { answers: os.results.map(function (r) { return r.answer; }) }, NEAR_CACHE_SEC);
     writeSlotRow_(sheet_(SH_QUIZ_A), slotRow_(me), { '参加者ID': pid }, {
       '参加者ID': pid, '書いた人数': j.writtenCount, '正解と判定した人のID': j.fullIds.join(','),
-      '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': originCorrect,
+      '名前の正答率': j.rate === null ? '' : j.rate, '出身地の回答': '', '出身地の正誤': os.total ? os.correct : '',
       '送信時刻': new Date(),
-      '0.5人分と判定した人のID': j.halfIds.join(','), '自動判定(控え)': formatCredits_(j.credits)
+      '0.5人分と判定した人のID': j.halfIds.join(','), '自動判定(控え)': formatCredits_(j.credits),
+      '出身地の問題数': os.total ? os.total : ''
     });
     cache_().put(doneKey, '1', NEAR_CACHE_SEC);
     // 運営が判断する答え:近い候補があるもの → 候補が出せないもの(NEAR_INCLUDE_UNKNOWN のとき)の順。
@@ -492,12 +504,27 @@ function buildQuizResult_(q, a, pending, people, published) {
     pendingOther: published ? 0 : pending.filter(function (n) { return !n.candidateId; }).length,
     published: !!published,
     members: members,
-    origin: q.originTarget ? {
-      targetName: displayName_(people, q.originTarget),
-      answer: q.answer,
-      yourAnswer: a.originAnswer,
-      correct: a.originCorrect === true
-    } : null
+    origin: originResultView_(q.originQuestions, a, people)
+  };
+}
+
+/** 出身地クイズの答え合わせ(問題がない・問題のキャッシュが消えたときは null) */
+function originResultView_(questions, a, people) {
+  if (!questions || !questions.length) return null;
+  var mine = a.originAnswers || [];
+  var sc = scoreOriginAnswers(questions, mine);
+  var names = function (ids) { return ids.map(function (id) { return displayName_(people, id); }); };
+  return {
+    // 正解数は、送ったときに採点してシートに書いた数(選んだ答えのキャッシュが消えていても変わらない)
+    correct: typeof a.originCorrect === 'number' ? a.originCorrect : sc.correct,
+    total: questions.length,
+    questions: questions.map(function (x, i) {
+      var r = sc.results[i];
+      if (x.type === 'C') {
+        return { type: 'C', pref: x.pref, answerNames: names(x.answerIds), yourNames: names(r.answer), correct: r.correct };
+      }
+      return { type: 'B', targetName: displayName_(people, x.targetId), answer: x.answer, yourAnswer: r.answer, correct: r.correct };
+    })
   };
 }
 

@@ -526,7 +526,7 @@
     var parts = S.ov.participants || [];
     var arrived = parts.filter(function (p) { return p.arrivedAt; }).length;
     var body = '全員のスマホがクイズ画面になり、名前 ' + setting('クイズ:名前の制限時間(秒)', 120) + '秒 → 出身地 ' +
-      setting('クイズ:出身地の制限時間(秒)', 15) + '秒 が始まります。\n来場 ' + arrived + '人 / 名簿 ' + parts.length + '人。スマホがない人は、先に名簿タブで「来場にする」を押してください。';
+      setting('クイズ:出身地の制限時間(秒)', 60) + '秒(3問)が始まります。\n来場 ' + arrived + '人 / 名簿 ' + parts.length + '人。スマホがない人は、先に名簿タブで「来場にする」を押してください。';
     if (st.quizStartedAt) body = 'すでに ' + clock(st.quizStartedAt) + ' に開始しています。開始時刻を今にしてやり直します。\n' + body;
     if (regen) body = 'まだ答えていない人の問題を作り直します。\n' + body;
     confirmBox(regen ? '問題を作り直して開始しますか？' : 'クイズを開始しますか？', body, '開始する', function () {

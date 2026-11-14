@@ -579,7 +579,7 @@
     var q = S.quiz;
     if (!q) return;
     store.set(quizStoreKey(q.key), { key: q.key, phase: q.phase === 'sending' ? 'sendErr' : q.phase, data: q.data, offset: q.offset,
-      names: q.names, origin: q.origin, originDeadline: q.originDeadline || 0, result: q.result || null, picked: q.picked || false });
+      names: q.names, originAns: q.originAns || [], oi: q.oi || 0, originDeadline: q.originDeadline || 0, result: null });
   }
   function loadQuiz(key) {
     var saved = store.get(quizStoreKey(key));
@@ -606,7 +606,7 @@
     var key = S.pid + '.' + timing.startedAt;
     if (S.quiz && S.quiz.key === key) return;
     store.set('aq.' + S.pid, key);
-    S.quiz = loadQuiz(key) || { key: key, phase: 'loading', names: [], origin: '' };
+    S.quiz = loadQuiz(key) || { key: key, phase: 'loading', names: [], originAns: [], oi: 0 };
     if (S.quiz.phase === 'loading') startQuiz();
     else render(true);
   }
@@ -627,7 +627,8 @@
       S.offset = q.offset;
       q.names = [];
       for (var i = 0; i < d.names.count; i++) q.names.push('');
-      q.origin = '';
+      q.originAns = [];
+      q.oi = 0;
       q.phase = 'names';
       saveQuiz();
       render(true);
@@ -655,17 +656,22 @@
     saveQuiz();
     render(true);
   }
+  /* 出身地クイズの問題(なければ空の配列) */
+  function originQs(q) { return (q && q.data && q.data.origin && q.data.origin.questions) || []; }
   function goOrigin() {
     var q = S.quiz;
     if (!q || q.phase !== 'names') return;
     readNameInputs();
-    var t = q.data.timing;
-    if (!q.data.origin || (t && serverNow() >= t.originEndsAt)) { submitQuiz(); return; }
-    // 出身地は15秒(originSeconds)。早く「次へ」を押した人も15秒だけ。全員の締め切り originEndsAt は超えない
-    q.originDeadline = Math.min(t.originEndsAt, serverNow() + (t.originSeconds || 15) * 1000);
+    var t = q.data.timing, oqs = originQs(q);
+    if (!oqs.length || (t && serverNow() >= t.originEndsAt)) { submitQuiz(); return; }
+    /* 出身地は3問で60秒(originSeconds)。早く「次へ」を押した人も60秒だけ。全員の締め切り originEndsAt は超えない */
+    q.originDeadline = Math.min(t.originEndsAt, serverNow() + (t.originSeconds || 60) * 1000);
+    q.originAns = oqs.map(function (x) { return x.type === 'C' ? [] : ''; });
+    q.oi = 0;
     q.phase = 'origin';
     saveQuiz();
     render(true);
+    window.scrollTo(0, 0);
   }
   function submitQuiz() {
     var q = S.quiz;
@@ -676,7 +682,7 @@
     render(true);
     var answers = {
       names: q.names.map(function (s) { return String(s || '').trim(); }).filter(function (s) { return s; }),
-      origin: q.origin || ''
+      origin: q.originAns || []
     };
     call('submitQuiz', [S.pid, answers], function (d) {
       if (S.quiz !== q) return;
@@ -741,12 +747,27 @@
     var el = $('qleft');
     if (!q || !el || !q.names) return;
     var filled = q.names.filter(function (s) { return String(s || '').trim(); }).length;
-    el.innerHTML = filled >= q.names.length ? '全員書けた!' : 'あと<b>' + (q.names.length - filled) + '</b>人';
+    el.innerHTML = filled >= q.names.length ? '全部入力した!' : 'あと<b>' + (q.names.length - filled) + '</b>人';
   }
   setInterval(function () { if (S.quiz && (S.quiz.phase === 'names' || S.quiz.phase === 'origin')) tickQuiz(); }, 250);
 
   function timerHtml(ms) {
     return '<div id="qtimer" class="timer"><span class="clock"></span><span id="qtime" class="t">' + mmss(ms) + '</span></div>';
+  }
+  /* 画面の上に貼りつく残り時間(キーボードが出ていても、スクロールしても見える) */
+  function quizBar(ms, extra) {
+    return '<div class="qbar">' + timerHtml(ms) + (extra || '') + '</div>';
+  }
+  /* 出身地クイズ:自分の答えを文字にする(一覧用) */
+  function originAnswerText(x, a) {
+    if (x.type === 'C') {
+      var names = (x.choices || []).filter(function (c) { return (a || []).indexOf(c.id) >= 0; }).map(function (c) { return c.name; });
+      return names.length ? names.join('、') : '';
+    }
+    return a || '';
+  }
+  function originQuestionText(x) {
+    return x.type === 'C' ? esc(x.pref) + '出身はだれ?(' + esc(x.count) + '人)' : esc(x.targetName) + ' さんの出身は?';
   }
 
   VIEWS.quiz = function () {
@@ -768,39 +789,73 @@
     }
     var d = q.data, t = d.timing || {}, now = serverNow();
     if (q.phase === 'origin') {
-      var o = d.origin;
-      var h = hero('mixle_think', 'どこ出身<br>だっけ?', true);
-      h += '<div class="card center"><div class="h2">出身地クイズ</div>' + timerHtml(originDeadline(q) - now) +
-        '<p class="h2" style="margin-top:14px"><span class="mark">' + esc(o.targetName) + '</span> さんの<br>出身地は？</p>';
-      h += '<div class="pref-grid">';
-      o.choices.forEach(function (c) {
-        h += '<button type="button" class="btn' + (q.origin === c ? ' on' : '') + '" data-act="quizOrigin" data-v="' + esc(c) + '">' + esc(c) + '</button>';
-      });
-      return h + '</div></div>';
+      var oqs = originQs(q), oi = Math.max(0, Math.min(q.oi || 0, oqs.length));
+      var h = quizBar(originDeadline(q) - now, '<span class="left">出身地クイズ <b>' + Math.min(oi + 1, oqs.length) + '</b>/' + oqs.length + '</span>');
+      if (oi >= oqs.length) {
+        /* 最後に3問の答えを一覧で確かめて、送信ボタンで送る */
+        h += '<div class="card"><div class="center h2">これで送る?</div>' +
+          '<p class="muted small center" style="margin:2px 0 8px">直したい問題はタップしてね</p>';
+        oqs.forEach(function (x, i) {
+          var txt = originAnswerText(x, q.originAns[i]);
+          h += '<button type="button" class="oq-row" data-act="originJump" data-i="' + i + '"><span class="no">' + (i + 1) + '</span>' +
+            '<span class="q">' + originQuestionText(x) + '<b class="' + (txt ? '' : 'none') + '">' + (txt ? esc(txt) : 'まだ選んでいないよ') + '</b></span><span class="arrow">›</span></button>';
+        });
+        h += '<button type="button" class="btn" data-act="originSend">送信する</button>';
+        h += '<p class="muted small center" style="margin:0">時間になったら、このまま自動で送ります</p></div>';
+        return h;
+      }
+      var x = oqs[oi], a = q.originAns[oi];
+      h += '<div class="card center">';
+      if (x.type === 'C') {
+        h += '<p class="h2" style="margin-top:6px"><span class="mark">' + esc(x.pref) + '</span>出身は<br>だれ?(' + esc(x.count) + '人)</p>';
+        if (x.count > 1) h += '<p class="muted small" style="margin:0">' + esc(x.count) + '人まで選べるよ</p>';
+        h += '<div class="pref-grid">';
+        x.choices.forEach(function (c) {
+          h += '<button type="button" class="btn name' + ((a || []).indexOf(c.id) >= 0 ? ' on' : '') + '" data-act="originToggle" data-v="' + esc(c.id) + '">' + esc(c.name) + '</button>';
+        });
+        h += '</div>';
+      } else {
+        h += '<p class="h2" style="margin-top:6px"><span class="mark">' + esc(x.targetName) + '</span> さんの<br>出身は?</p>';
+        h += '<div class="pref-grid">';
+        x.choices.forEach(function (c) {
+          h += '<button type="button" class="btn' + (a === c ? ' on' : '') + '" data-act="originPick" data-v="' + esc(c) + '">' + esc(c) + '</button>';
+        });
+        h += '</div>';
+      }
+      h += '<div class="oq-nav">' +
+        (oi > 0 ? '<button type="button" class="btn sub" data-act="originPrev">‹ 前の問題</button>' : '<span></span>') +
+        '<button type="button" class="btn' + (x.type === 'C' ? '' : ' sub') + '" data-act="originNext">' + (oi + 1 >= oqs.length ? '答えを確かめる ›' : '次の問題 ›') + '</button></div>';
+      return h + '</div>';
     }
     // 名前の問題
     var n = d.names.count;
-    var h2 = hero('mixle_think', '名前、<br>覚えてる?', true);
+    var h2 = quizBar(t.nameEndsAt - now, n > 0 ? '<span id="qleft" class="left"></span>' : '');
     h2 += '<div class="card center"><div class="h2">チームのメンバー<span class="mark">' + n + '人</span>の<br>名前を書こう</div>' +
-      timerHtml(t.nameEndsAt - now) + '<p class="muted small" style="margin:8px 0 0">フルネームで書くと高得点。漢字でもひらがなでもOK。<br>' +
+      '<p class="muted small" style="margin:8px 0 0">フルネームで書くと高得点。漢字でもひらがなでもOK。<br>' +
       '名前だけ・名字だけ・あだ名でもOK(〜さん・〜先輩は付けてもOK)</p></div>';
-    h2 += '<div class="card">';
     if (n === 0) {
-      h2 += '<p class="center">書く人はいないよ。そのまま次へ進んでね</p>';
+      h2 += '<div class="card"><p class="center">書く人はいないよ。そのまま次へ進んでね</p>';
     } else {
-      h2 += '<p id="qleft" class="left"></p>';
-      h2 += '<p class="muted small center" style="margin:0 0 4px">右はヒント(スポーツ/ひとこと)。順番は欄とバラバラだよ</p>';
+      /* ヒントは入力欄と別の枠にまとめる(同じ行にあると、その欄の人のヒントに見えるため) */
+      var hints = (d.names.hints || []).filter(function (x) { return x; });
+      if (hints.length) {
+        h2 += '<div class="card hints"><p class="h3 center" style="margin:0">ヒント</p>' +
+          '<p class="muted small center" style="margin:0 0 6px">チームメイトのスポーツ/ひとこと。順番はバラバラだよ</p><div class="hint-list">';
+        hints.forEach(function (hint, i) {
+          h2 += '<div class="hint h' + (i % 4) + '"><span class="sp">' + esc(hint.sport) + '</span>' + esc(hint.comment) + '</div>';
+        });
+        h2 += '</div></div>';
+      }
+      h2 += '<div class="card">';
       for (var i = 0; i < n; i++) {
-        var hint = d.names.hints[i];
         var v = q.names[i] || '';
         h2 += '<div class="qrow"><span class="no">' + (i + 1) + '</span>' +
           '<input class="input' + (v.trim() ? ' filled' : '') + '" type="text" data-in="qname" data-i="' + i + '" value="' + esc(v) +
-          '" placeholder="名前を入力" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">' +
-          (hint ? '<div class="hint h' + (i % 4) + '"><span class="sp">' + esc(hint.sport) + '</span>' + esc(hint.comment) + '</div>'
-                : '<div class="hint none">ヒントなし</div>') + '</div>';
+          '" placeholder="名前を入力" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next"></div>';
       }
     }
-    h2 += '<button type="button" class="btn" data-act="quizNext">' + (d.origin ? '次へ(出身地の問題)' : '送信する') + '</button>';
+    var oCount = originQs(q).length;
+    h2 += '<button type="button" class="btn" data-act="quizNext">' + (oCount ? '次へ(出身地クイズ ' + oCount + '問)' : '送信する') + '</button>';
     h2 += '<p class="muted small center" style="margin:0">時間になったら自動で次へ進みます</p></div>';
     return h2;
   };
@@ -896,12 +951,18 @@
       half.forEach(function (m) { h += person(m, m.pending ? '確認中' : ''); });
       h += '</div>';
     }
-    if (res.origin) {
+    if (res.origin && res.origin.questions) {
       var o = res.origin;
-      h += '<div class="card center"><div class="h3">出身地クイズ</div>' +
-        '<p style="margin:4px 0">' + esc(o.targetName) + ' さんの出身地は<br><span class="big" style="font-size:30px">' + esc(o.answer) + '</span></p>' +
-        (o.correct ? '<p class="okmark msg">正解!</p>'
-          : '<p class="ngmark">' + (o.yourAnswer ? 'あなたの答え:' + esc(o.yourAnswer) : '時間切れ') + '</p>') + '</div>';
+      h += '<div class="card"><div class="center h3">出身地クイズ <span class="mark">' + esc(o.total) + '問中 ' + esc(o.correct) + '問 正解</span></div>';
+      o.questions.forEach(function (x) {
+        var isC = x.type === 'C';
+        var yours = isC ? (x.yourNames || []).join('、') : x.yourAnswer;
+        h += '<div class="oa-row"><div class="q">' + (isC ? esc(x.pref) + '出身は' : esc(x.targetName) + ' さんの出身は') + '</div>' +
+          '<div class="a">' + esc(isC ? (x.answerNames || []).join('、') : x.answer) + '</div>' +
+          (x.correct ? '<div class="okmark">正解!</div>'
+            : '<div class="ngmark">' + (yours ? 'あなたの答え:' + esc(yours) : '選んでいなかったよ') + '</div>') + '</div>';
+      });
+      h += '</div>';
     }
     if (!res.published) h += '<p class="muted small center">チームの点数と順位は、結果発表で!</p>';
     return h;
@@ -1042,13 +1103,31 @@
     predict: function (el) { submitPrediction(el.getAttribute('data-team')); },
     quizRetryStart: function () { startQuiz(); },
     quizNext: function () { goOrigin(); },
-    quizOrigin: function (el) {
+    /* 出身地クイズ:B は選ぶと次の問題へ。C は人数まで選んで「次の問題」。前に戻って直せる。送るのは最後の「送信する」 */
+    originPick: function (el) {
       var q = S.quiz;
       if (!q || q.phase !== 'origin') return;
-      q.origin = el.getAttribute('data-v');
+      q.originAns[q.oi] = el.getAttribute('data-v');
+      q.oi++;
       saveQuiz();
-      submitQuiz();
+      render(true);
     },
+    originToggle: function (el) {
+      var q = S.quiz;
+      if (!q || q.phase !== 'origin') return;
+      var x = originQs(q)[q.oi], id = el.getAttribute('data-v');
+      var arr = (q.originAns[q.oi] || []).slice(), i = arr.indexOf(id);
+      if (i >= 0) arr.splice(i, 1);
+      else if (arr.length >= x.count) { toast('選べるのは' + x.count + '人まで。外してから選んでね'); return; }
+      else arr.push(id);
+      q.originAns[q.oi] = arr;
+      saveQuiz();
+      render(true);
+    },
+    originNext: function () { var q = S.quiz; if (q && q.phase === 'origin') { q.oi = Math.min(originQs(q).length, (q.oi || 0) + 1); saveQuiz(); render(true); } },
+    originPrev: function () { var q = S.quiz; if (q && q.phase === 'origin') { q.oi = Math.max(0, (q.oi || 0) - 1); saveQuiz(); render(true); } },
+    originJump: function (el) { var q = S.quiz; if (q && q.phase === 'origin') { q.oi = +el.getAttribute('data-i'); saveQuiz(); render(true); } },
+    originSend: function () { var q = S.quiz; if (q && q.phase === 'origin') submitQuiz(); },
     quizResend: function () { retrySubmit(); },
     openReview: function () { openReview(); },
     openSurvey: function () {

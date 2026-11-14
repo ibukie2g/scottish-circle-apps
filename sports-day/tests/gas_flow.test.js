@@ -175,16 +175,22 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   st = ok(g.getState());
   assert.equal(st.mode, 'クイズ');
   assert.equal(st.quiz.nameEndsAt - st.quiz.startedAt, 120000);
-  assert.equal(st.quiz.originEndsAt - st.quiz.nameEndsAt, 15000);
+  assert.equal(st.quiz.originEndsAt - st.quiz.nameEndsAt, 60000); // 出身地は3問で60秒
   assert.equal(g.listTeamMembers('A').error.code, 'QUIZ_MODE');
   const q1 = ok(g.startQuiz('P01'));
   assert.equal(q1.names.count, 2);
   assert.equal(q1.names.hints.filter(h => h).length, 2); // P02・P03 の自己紹介
   assert.ok(!JSON.stringify(q1).includes('けんけん')); // あだ名はヒントに出さない
-  assert.equal(q1.origin.choices.length, 4);
-  assert.ok(['渡辺 太郎', '高橋 健'].includes(q1.origin.targetName));
+  // 出身地クイズ:チームメイトが2人なので B「〇〇さんの出身は?」が2問(C は4人そろわないので出ない)
+  assert.equal(q1.origin.questions.length, 2);
+  for (const oq of q1.origin.questions) {
+    assert.equal(oq.type, 'B');
+    assert.equal(oq.choices.length, 4);
+    assert.ok(!('answer' in oq)); // 正解は画面に返さない
+  }
+  assert.deepEqual(q1.origin.questions.map(x => x.targetName).sort(), ['渡辺 太郎', '高橋 健'].sort());
   const qRow = app.getSheetByName('クイズ問題').data.find(r => r[0] === 'P01');
-  const answer = g.cacheGetJson_('origin:P01').answer;
+  const answer = g.cacheGetJson_('origin:P01').questions.map(x => x.answer); // 2問とも正解を送る
   assert.equal(qRow[7], ''); // 正解はシートに保存しない
   // 送っても、答え合わせは返さない(アンケートを送ってから)
   const sent = ok(g.submitQuiz('P01', { names: ['ワタナベタロウ', 'たかはしけ', 'なぞのひと'], origin: answer }));
@@ -205,7 +211,8 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(res.correctCount, 1);
   assert.equal(res.pendingCount, 1);  // 「たかはしけ」→ 高橋 健 を確認中
   assert.equal(res.pendingOther, 1);  // 「なぞのひと」はだれの答えか分からない
-  assert.equal(res.origin.correct, true);
+  assert.deepEqual([res.origin.correct, res.origin.total], [2, 2]);
+  assert.deepEqual(res.origin.questions.map(x => [x.correct, x.yourAnswer === x.answer]), [[true, true], [true, true]]);
   const missed = res.members.find(m => !m.written);
   assert.deepEqual([missed.name, missed.pending, missed.nickname], ['高橋 健', true, 'けんけん、たかっち、ケンさん']);
   assert.ok(!JSON.stringify(res).includes('quiz') && !JSON.stringify(res).includes('Rank')); // チームの点数・順位は入れない
@@ -225,6 +232,9 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(aRow[aHead.indexOf('0.5人分と判定した人のID')], 'P03');
   assert.equal(aRow[aHead.indexOf('自動判定(控え)')], 'P01:1,P03:0.5');
   assert.ok(Math.abs(aRow[aHead.indexOf('名前の正答率')] - 0.85) < 1e-9);
+  assert.deepEqual([aRow[aHead.indexOf('出身地の正誤')], aRow[aHead.indexOf('出身地の問題数')]], [0, 2]); // 正解数と問題数
+  const aRow1 = app.getSheetByName('クイズ回答').data.find(r => r[0] === 'P01');
+  assert.deepEqual([aRow1[aHead.indexOf('出身地の正誤')], aRow1[aHead.indexOf('出身地の問題数')]], [2, 2]);
 
   // 運営の判断:候補あり(たかはしけ → P03)が先、候補なし(なぞのひと)が後
   let near = ok(g.adminListNearMisses(token));
@@ -270,7 +280,7 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   // 集計
   const sc = ok(g.adminGetScores(token2));
   const A = sc.teams.find(t => t.team === 'A');
-  // 名前: P01=1.2, P02=0.85, P03=0 → 平均 0.683 × 7 = 4.78。出身地: P01 正解、P02・P03 不正解 → 1/3 × 3 = 1
+  // 名前: P01=1.2, P02=0.85, P03=0 → 平均 0.683 × 7 = 4.78。出身地: P01 2問正解、P02・P03 0問(各2問)→ 2/6 × 3 = 1
   assert.equal(A.quiz, 5.8);
   assert.equal(A.odai, 1);
   const C = sc.teams.find(t => t.team === 'C');

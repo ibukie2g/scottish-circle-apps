@@ -134,13 +134,23 @@ function readQuizQuestions_(fresh) {
     return {
       participantId: toStr_(r['参加者ID']),
       nameTargets: splitIds_(r['名前の対象者ID']),
-      originTarget: (origin || {}).originTarget || '',
-      choices: (origin || {}).choices || [],
-      answer: (origin || {}).answer || '',
+      originQuestions: (origin || {}).questions || [], // 出身地クイズの問題(makeOriginQuiz の形)。キャッシュにだけ置く
       originExpired: !origin,
       _row: r._row
     };
   }).filter(function (q) { return q.participantId; });
+}
+
+/**
+ * 出身地の点数を読む。「出身地の正誤」= 正解数、「出身地の問題数」= 問題数(2026-11-13 から)
+ * 前の形(TRUE/FALSE、問題数の列なし)は、1問中 1/0 問正解として読む。空欄は問題なし
+ */
+function parseOriginScore_(correctCell, totalCell) {
+  if (toStr_(correctCell) === '') return { correct: null, total: 0 };
+  var n = toNumOrNull_(correctCell);
+  if (typeof correctCell === 'boolean' || n === null) return { correct: toBool_(correctCell) ? 1 : 0, total: 1 };
+  var total = toNumOrNull_(totalCell);
+  return { correct: n, total: total && total > 0 ? total : Math.max(1, n) };
 }
 
 /** 「P02:1,P03:0.5」→ {P02: 1, P03: 0.5}(自動判定の控え) */
@@ -159,7 +169,7 @@ function formatCredits_(credits) {
 
 function readQuizAnswers_(fresh) {
   return readTable_(SH_QUIZ_A, fresh).rows.map(function (r) {
-    var oc = toStr_(r['出身地の正誤']);
+    var os = parseOriginScore_(r['出身地の正誤'], r['出身地の問題数']);
     var fullIds = splitIds_(r['正解と判定した人のID']);
     var auto = parseCredits_(r['自動判定(控え)']);
     // 控えの列ができる前の行は、正解の列をそのまま自動判定とみなす
@@ -171,8 +181,9 @@ function readQuizAnswers_(fresh) {
       halfIds: splitIds_(r['0.5人分と判定した人のID']),        // 0.5人分(運営の判断を足したあと)
       auto: auto,                                             // アプリが自動で決めた分 {参加者ID: 1 | 0.5}
       nameRate: toNumOrNull_(r['名前の正答率']),
-      originAnswer: (cacheGetJson_('originResponse:' + r['参加者ID']) || {}).answer || '',
-      originCorrect: oc === '' ? null : toBool_(r['出身地の正誤']),
+      originAnswers: (cacheGetJson_('originResponse:' + r['参加者ID']) || {}).answers || null, // 選んだ答え(キャッシュにだけ置く)
+      originCorrect: os.correct, // 出身地の正解数(問題がなければ null)
+      originTotal: os.total,     // 出身地の問題数
       submittedAt: toMs_(r['送信時刻']),
       _row: r._row
     };
@@ -268,7 +279,7 @@ function buildScores_(fresh) {
   parts.forEach(function (p) { byId[p.id] = p; });
   var quizAnswers = readQuizAnswers_(fresh).filter(function (a) { return byId[a.participantId]; }).map(function (a) {
     var p = byId[a.participantId];
-    return { team: p.team, include: p.quizInclude, nameRate: a.nameRate, originCorrect: a.originCorrect };
+    return { team: p.team, include: p.quizInclude, nameRate: a.nameRate, originCorrect: a.originCorrect, originTotal: a.originTotal };
   });
   var result = computeAll({
     matches: readMatches_(fresh),

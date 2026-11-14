@@ -47,7 +47,7 @@ var DEFAULT_SETTINGS = {
   odaiFactor: 1.5,
   predictionMax: 2,
   quizNameSeconds: 120,
-  quizOriginSeconds: 15
+  quizOriginSeconds: 60
 };
 
 // 設定シートのキー → 設定オブジェクトのキー
@@ -292,11 +292,14 @@ function rankBy_(rows, key) {
 
 /**
  * クイズの点数
- * @param {{team:string, include:boolean, nameRate:(number|null), originCorrect:(boolean|null)}[]} answers
+ * @param {{team:string, include:boolean, nameRate:(number|null), originCorrect:(number|boolean|null), originTotal?:number}[]} answers
  *   回答した人ごと。include=false の人と nameRate=null の人は名前の平均に入れない。
- *   originCorrect=null(出身地の問題がなかった人)は出身地の計算に入れない。
- * @return {Object<string, {points:number, nameAvg:(number|null), originRate:(number|null), respondents:number}>}
- *   回答した人がいない項目は0点
+ *   nameRate はボーナス込みで 1 を超えることがある(名前の点が満点を超えてよい)。
+ *   出身地は originCorrect = 正解数、originTotal = 問題数(1問1点)。問題がなかった人(null・問題数0)は計算に入れない。
+ *   originCorrect が true/false のとき(前の形)は 1問中 1/0 問正解として数える。
+ * @return {Object<string, {points:number, namePoints:number, originPoints:number,
+ *   nameAvg:(number|null), originRate:(number|null), respondents:number}>}
+ *   originRate = チームの正解数の合計 ÷ 問題数の合計。回答した人がいない項目は0点
  */
 function computeQuizPoints(answers, settings) {
   var out = {};
@@ -304,14 +307,22 @@ function computeQuizPoints(answers, settings) {
     var mine = (answers || []).filter(function (a) { return a.team === t && a.include !== false; });
     var rates = mine.filter(function (a) { return typeof a.nameRate === 'number' && isFinite(a.nameRate); })
       .map(function (a) { return a.nameRate; });
-    var origins = mine.filter(function (a) { return a.originCorrect === true || a.originCorrect === false; });
     var nameAvg = rates.length ? rates.reduce(function (x, y) { return x + y; }, 0) / rates.length : null;
-    var originRate = origins.length
-      ? origins.filter(function (a) { return a.originCorrect; }).length / origins.length
-      : null;
-    var pts = (nameAvg === null ? 0 : settings.quizNameMax * nameAvg) +
-      (originRate === null ? 0 : settings.quizOriginMax * originRate);
-    out[t] = { points: round1(pts), nameAvg: nameAvg, originRate: originRate, respondents: mine.length };
+    var correct = 0, asked = 0;
+    mine.forEach(function (a) {
+      if (a.originCorrect === true || a.originCorrect === false) { asked += 1; correct += a.originCorrect ? 1 : 0; return; }
+      var n = Number(a.originTotal) || 0;
+      if (typeof a.originCorrect !== 'number' || n <= 0) return;
+      asked += n;
+      correct += Math.max(0, Math.min(n, a.originCorrect));
+    });
+    var originRate = asked ? correct / asked : null;
+    var namePts = nameAvg === null ? 0 : settings.quizNameMax * nameAvg;
+    var originPts = originRate === null ? 0 : settings.quizOriginMax * originRate;
+    out[t] = {
+      points: round1(namePts + originPts), namePoints: round1(namePts), originPoints: round1(originPts),
+      nameAvg: nameAvg, originRate: originRate, respondents: mine.length
+    };
   });
   return out;
 }

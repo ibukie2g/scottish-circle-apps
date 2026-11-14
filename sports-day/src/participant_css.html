@@ -295,9 +295,27 @@ img { max-width: 100%; }
 .timer .t { font-size: 46px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 .timer.hurry { background: #f3b8ad; animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { transform: scale(1.04); } }
-.qrow { display: grid; grid-template-columns: 28px 1fr minmax(96px, 38%); gap: 8px; align-items: center; margin: 9px 0; }
+/* 残り時間:画面の上に貼りつける(キーボードが出ていても、スクロールしても見える。P1-1) */
+.qbar {
+  position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin: 0 -4px 10px; padding: 6px 8px; border-radius: 0 0 16px 16px;
+  background: rgba(246, 238, 220, .96); box-shadow: 0 3px 8px rgba(120, 90, 50, .14);
+}
+.qbar .timer { margin: 0; padding: 2px 14px; }
+.qbar .timer .t { font-size: 34px; }
+.qbar .timer .clock { width: 26px; height: 26px; border-width: 3px; }
+.qbar .timer .clock::after { top: 3px; height: 8px; }
+.qbar .timer .clock::before { top: -8px; }
+.qbar .left { margin: 0; font-size: 15px; white-space: nowrap; }
+.qbar .left b { font-size: 24px; }
+/* 名前の入力欄:番号と入力欄だけ。入力欄をほぼ横幅いっぱいにする(P1-1) */
+.qrow { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: center; margin: 9px 0; }
 .qrow .no { width: 28px; height: 28px; border-radius: 50%; background: var(--A-tint); color: var(--A); font-weight: 800; display: grid; place-items: center; font-size: 15px; }
-.qrow .input { padding: 10px 12px; font-size: 16px; }
+.qrow .input { padding: 12px 12px; font-size: 17px; width: 100%; min-width: 0; }
+/* ヒントは入力欄と別の枠にまとめる */
+.hints { padding-top: 10px; padding-bottom: 12px; }
+.hint-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.hint-list .hint { flex: 1 1 44%; }
 .qrow .input.filled { border-color: #b9d3ae; background: #fbfff8; }
 .hint { border-radius: 12px; padding: 5px 8px; font-size: 12px; line-height: 1.35; font-weight: 700; word-break: break-all; }
 .hint .sp { display: block; font-size: 11px; opacity: .8; }
@@ -309,6 +327,23 @@ img { max-width: 100%; }
 .pref-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
 .pref-grid .btn { margin: 0; padding: 20px 8px; font-size: 20px; background: #fff; color: var(--ink); border: 2px solid var(--line); box-shadow: 0 3px 0 rgba(0, 0, 0, .08); }
 .pref-grid .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pref-grid .btn.name { font-size: 17px; padding: 18px 6px; line-height: 1.3; }
+/* 出身地クイズ:前へ/次へ、答えの一覧 */
+.oq-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.oq-nav .btn { margin: 0; padding: 12px 6px; font-size: 16px; }
+.oq-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; color: inherit;
+  border: 2px solid var(--line); border-radius: 16px; background: #fff; padding: 10px 12px; margin: 8px 0;
+}
+.oq-row .no { width: 28px; height: 28px; border-radius: 50%; background: var(--B-tint); color: var(--B); font-weight: 800; display: grid; place-items: center; flex: none; }
+.oq-row .q { flex: 1; min-width: 0; font-size: 13px; color: var(--ink-soft); }
+.oq-row .q b { display: block; font-size: 19px; color: var(--ink); line-height: 1.3; }
+.oq-row .q b.none { color: var(--ng); font-size: 15px; }
+.oq-row .arrow { font-size: 22px; color: var(--ink-soft); }
+/* 答え合わせ:出身地クイズ */
+.oa-row { border-top: 2px dashed var(--line); padding: 8px 0; text-align: center; }
+.oa-row .q { font-size: 13px; color: var(--ink-soft); }
+.oa-row .a { font-size: 22px; font-weight: 800; line-height: 1.3; }
 
 /* ===== 答え合わせ ===== */
 .score-head { text-align: center; padding: 18px 12px; border: 3px solid var(--hl); }

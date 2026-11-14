@@ -87,8 +87,8 @@ data = {
   quiz: null | {                   // mode が 'クイズ' のときだけ
     startedAt: 1764000000000,      // 運営が「クイズ開始」を押した時刻
     nameEndsAt: 1764000120000,     // 名前の問題の締め切り = startedAt + 120秒
-    originEndsAt: 1764000135000,   // 出身地の問題の締め切り = nameEndsAt + 15秒
-    nameSeconds: 120, originSeconds: 15
+    originEndsAt: 1764000180000,   // 出身地の問題の締め切り = nameEndsAt + 60秒(3問)
+    nameSeconds: 120, originSeconds: 60
   },
   results: null | {                // mode が '結果公開' のときだけ。総合結果と内訳
     teams: [
@@ -211,9 +211,14 @@ data = {
       ...
     ]
   },
-  origin: null | {                  // 出身地の4択。対象がいなければ null(この問題はとばす)
-    targetName: '渡辺 太郎',          // 「〇〇さんの出身地は？」
-    choices: ['宮城県', '山形県', '福島県', '岩手県']
+  origin: null | {                  // 出身地クイズ(ふつう3問)。作れなければ null(とばす)
+    questions: [                    // 順番は人ごとにランダム。正解は入っていない
+      { type: 'B', targetName: '渡辺 太郎',               // 「〇〇さんの出身は?」→ 4つの県から1つ選ぶ
+        choices: ['宮城県', '山形県', '福島県', '岩手県'] },
+      { type: 'C', pref: '東京都', count: 2,               // 「東京都出身はだれ?(2人)」→ 名前4人から count 人まで選ぶ
+        choices: [ { id: 'P03', name: '高橋 健' }, { id: 'P05', name: '小島 さくら' }, ... ] },
+      ...
+    ]
   }
 }
 // すでに送っていたとき(画面の開き直し)。答え合わせは返さない(getQuizResult で受け取る)
@@ -223,19 +228,25 @@ data = { alreadyAnswered: true, surveyDone: true | false }
 **クイズの進み方(全員同時)**
 1. 名前の問題:`nameEndsAt` まで。入力欄に `names.count` 人分の欄と、`names.hints` を「スポーツ/ひとこと」で並べる(ヒントはどの欄の人かは対応しない)。あだ名は出さない。漢字・ひらがな・カタカナどれでもよい
    - 画面の説明:「フルネームで書くと高得点。漢字でもひらがなでもOK。名前だけ・名字だけ・あだ名でもOK(〜さん・〜先輩は付けてもOK)」。ボーナスの数字は出さない
-2. 本人が「次へ」を押すか `nameEndsAt` になったら、出身地の問題へ。出身地の問題は `originEndsAt` まで(`origin` が null なら飛ばす)
-3. 本人が選ぶか `originEndsAt` になったら、`submitQuiz` を呼ぶ(時間切れで未選択なら `origin: ''`)
+2. 本人が「次へ」を押すか `nameEndsAt` になったら、出身地クイズへ。出身地クイズは `originEndsAt` まで(`origin` が null なら飛ばす)。早く進んだ人も、持ち時間は `originSeconds`(60秒)まで
+   - B は選ぶと次の問題へ進む。C は `count` 人まで選んで「次の問題」。前の問題に戻って直せる
+   - **最後に3問の答えを一覧で確かめて、「送信する」ボタンで `submitQuiz` を呼ぶ**(選んだ瞬間には送らない)
+3. `originEndsAt`(または持ち時間)になったら、そのときの答えで自動で `submitQuiz` を呼ぶ(選んでいない問題は `''` か `[]` = 不正解)
 - 時間は **各自の開始からではなく、運営が「クイズ開始」を押した時刻が基準**。残り時間は `nameEndsAt - (Date.now() + (serverNow - 受け取った時の Date.now()))` のように、サーバー時刻とのずれを直して数える
 - 途中で開いた人は、残り時間だけになる(締め切り後に開いた人も、送信は受け付ける)
-- `targetName`(出身地の対象者の名前)は、名前の問題が終わるまで画面に出さない
+- 出身地クイズの中身(チームメイトの名前が出る)は、本人の名前の問題が終わるまで画面に出さない
+- 名前の問題:残り時間は画面の上に固定する(キーボードが出ていても見える)。入力欄は横幅いっぱい、ヒントは入力欄と別の枠にまとめる
 - 答えは端末(localStorage)に置いておき、送信が失敗したら再送ボタン
 
 ### submitQuiz(participantId, answers)
 クイズの答えをまとめて1回送る。**再送しても最初の答えのまま**(二重にならない)。mode が '結果公開' になったあとは `QUIZ_CLOSED`。
 ```js
-submitQuiz('P01', { names: ['さいとうはなこ', '渡辺太郎', ''], origin: '宮城県' })
+submitQuiz('P01', { names: ['さいとうはなこ', '渡辺太郎', ''], origin: ['宮城県', ['P03', 'P05'], ''] })
 data = { accepted: true, surveyDone: true | false }
 ```
+- `origin`:出身地クイズの答え。**startQuiz の `origin.questions` と同じ順番の配列**。B は選んだ県名、C は選んだ人の `id` の配列。選んでいない問題は `''` か `[]`
+  - 1問1点。B は正解の県名と同じなら正解。C は正解の人とぴったり同じ人を選んだら正解(`count` 人より多く送ると、先頭から `count` 人だけ使う)
+  - 選択肢にない答えは不正解で、どこにも保存しない
 - **答え合わせは返さない**(2026-11-14)。送ったあとは「アンケートに答えると、自分の結果が見られるよ」と出し、アンケートを送ってから `getQuizResult` で受け取る
 - 名前の判定(サーバー側):
   | 答え | 判定 |
@@ -268,7 +279,14 @@ data = {
       { name: '斎藤 花子', kana: 'さいとう はなこ', nickname: '', written: true, credit: 1, pending: false }, // credit は 1 / 0.5 / 0
       ...
     ],
-    origin: null | { targetName: '渡辺 太郎', answer: '宮城県', yourAnswer: '山形県', correct: false }
+    origin: null | {       // 出身地クイズの答え合わせ(問題がなかった・6時間たったときは null)
+      correct: 2, total: 3,
+      questions: [
+        { type: 'B', targetName: '渡辺 太郎', answer: '宮城県', yourAnswer: '山形県', correct: false }, // 選んでいなければ yourAnswer: ''
+        { type: 'C', pref: '東京都', answerNames: ['高橋 健', '小島 さくら'], yourNames: ['高橋 健', '小島 さくら'], correct: true },
+        ...
+      ]
+    }
   }
 }
 ```
@@ -506,7 +524,7 @@ data = {
 ```js
 adminSaveSettings(token, { 'バレー勝ちボーナス': 5, '順位点': '10,7,4,2' })
 data = { rows: [ { key, value, description } ], parsed: { rankPoints: [10,7,4,2], volleyWinBonus: 5, quizNameMax: 7,
-         quizOriginMax: 3, odaiAllMatch: 2, odaiFactor: 1.5, predictionMax: 2, quizNameSeconds: 120, quizOriginSeconds: 15 } }
+         quizOriginMax: 3, odaiAllMatch: 2, odaiFactor: 1.5, predictionMax: 2, quizNameSeconds: 120, quizOriginSeconds: 60 } }
 ```
 キー:`順位点` / `バレー勝ちボーナス` / `クイズ:名前の満点` / `クイズ:出身地の満点` / `お題カード:全員一致の点` / `お題カード:それ以外の係数` / `予想:1試合の満点` / `クイズ:名前の制限時間(秒)` / `クイズ:出身地の制限時間(秒)`(「:」は半角)。知らないキーは `INVALID`。
 
