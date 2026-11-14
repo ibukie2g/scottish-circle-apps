@@ -236,6 +236,24 @@ test('運営の判断:同じチームの同じ答えは1回で判断でき、候
  assert.equal(g.adminListNearMisses(t,true).data.items.find(x=>x.count===2).candidateId,'P03');
  assert.equal(g.adminGetOverview(t).data.pendingNearMisses,1);
 });
+test('自動正解が0人でも、公開後に運営の1人分を0.5人分・別の候補・×へ直せる',()=>{
+ const e=world(),g=e.ctx,t=e.token;g.adminStartQuiz(t);
+ g.submitQuiz('P01',{names:['みっちゃん'],origin:[]});
+ g.submitSurvey(SURVEY,'P01');g.adminPublishResults(t);
+ const read=()=>g.getQuizResult('P01').data.result;
+ assert.equal(g.adminJudgeNearMiss(t,101,'1人分','P02').ok,true);
+ assert.equal(read().fullCount,1);
+ assert.equal(g.adminJudgeNearMiss(t,101,'0.5人分','P02').ok,true);
+ assert.equal(read().fullCount,0);assert.equal(read().correctCount,1);
+ assert.equal(g.adminJudgeNearMiss(t,101,'1人分','P03').ok,true);
+ assert.equal(read().correctCount,1);
+ const a=g.readQuizAnswers_(true).find(x=>x.participantId==='P01');
+ assert.deepEqual(J(a.correctIds),['P03']);assert.deepEqual(J(a.halfIds),[]);
+ assert.equal(g.adminJudgeNearMiss(t,101,'×').ok,true);
+ assert.equal(read().correctCount,0);
+ assert.equal(g.adminGetScores(t).data.teams.find(x=>x.team==='A').quiz,0);
+});
+
 test('候補が出せない答えを一覧に出すかは NEAR_INCLUDE_UNKNOWN で切り替えられる',()=>{
  const e=world(),g=e.ctx,t=e.token;g.adminStartQuiz(t);
  require('node:vm').runInContext('NEAR_INCLUDE_UNKNOWN = false',g);

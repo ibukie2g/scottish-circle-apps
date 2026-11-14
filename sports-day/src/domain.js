@@ -178,7 +178,8 @@ function parseCredits_(v) {
 }
 
 function formatCredits_(credits) {
-  return Object.keys(credits).map(function (id) { return id + ':' + credits[id]; }).join(',');
+  // 空欄は旧形式の回答との互換用。「自動正解なし」も明示し、運営の判断を自動正解に取り込まない。
+  return Object.keys(credits).map(function (id) { return id + ':' + credits[id]; }).join(',') || '-';
 }
 
 function readQuizAnswers_(fresh) {
