@@ -19,10 +19,13 @@ test('準決勝修正・取消で後続の得点と予想を破棄',()=>{
  g.adminSaveMatch(t,'V-SF1',10,25);assert.equal(match(e,'V-F').status,'予定');assert.equal(match(e,'V-F').score1,null);
  g.adminUnconfirmMatch(t,'V-SF2');assert.equal(match(e,'V-F').team1,'');
 });
-test('予想公開後に来場者が増えても変更不可',()=>{
+test('予想は全員そろっても公開しない。締め切ったあとは、来場者が増えても変更できない',()=>{
  const e=world(),g=e.ctx;g.selectSelf('P01');g.selectSelf('P02');g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
- g.submitPrediction('P01','V-SF1','A');g.submitPrediction('P02','V-SF1','A');g.selectSelf('P03');
- assert.equal(g.getPrediction('P01').data.revealed,true);assert.equal(g.submitPrediction('P01','V-SF1','B').ok,false);
+ g.submitPrediction('P01','V-SF1','A');g.submitPrediction('P02','V-SF1','A');
+ assert.equal(g.getPrediction('P01').data.revealed,false);assert.equal(g.submitPrediction('P01','V-SF1','B').ok,true);
+ g.adminSetPredictionStatus(e.token,'V-SF1','公開');g.selectSelf('P03');
+ assert.equal(g.getPrediction('P01').data.revealed,true);assert.equal(g.submitPrediction('P01','V-SF1','A').error.code,'PREDICTION_CLOSED');
+ assert.equal(g.getPrediction('P03').data.revealed,true);
 });
 test('シート直接確定を状態取得時に自動補完',()=>{
  const e=world();for(const id of ['V-SF1','V-SF2']){const r=e.app.getSheetByName('試合').data.find(r=>r[0]===id);r[5]=25;r[6]=10;r[7]='確定';}
@@ -69,11 +72,28 @@ test('お題は1〜3の整数のみ・集計は範囲外と重複を除外',()=>
  const s=g.computeOdaiPoints([{number:1,team:'C',matched:3,answered:3},{number:1,team:'C',matched:3,answered:3},{number:4,team:'C',matched:3,answered:3}],g.DEFAULT_SETTINGS);assert.equal(s.C,2);
 });
 
-test('締め切りは画面を開かなくても公開履歴を保存する',()=>{
- const e=world(),g=e.ctx;g.adminSetPredictionStatus(e.token,'V-SF1','公開');
- assert.equal(e.app.getSheetByName('予想公開').getLastRow(),3);
- g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
- assert.equal(g.submitPrediction('P01','V-SF1','A').error.code,'PREDICTION_REVEALED');
+test('予想:受付中に戻すとまた変えられる・点数を確定したら自動で締め切る・経過時間の基準は受付開始',()=>{
+ const e=world(),g=e.ctx,t=e.token;g.selectSelf('P01');
+ g.adminSetPredictionStatus(t,'V-SF1','受付中');const opened=g.adminGetOverview(t).data.state.predictionOpenedAt;
+ assert.equal(typeof opened,'number');
+ g.adminSetPredictionStatus(t,'V-SF1','公開');assert.equal(g.submitPrediction('P01','V-SF1','A').error.code,'PREDICTION_CLOSED');
+ e.clock.advance(1000);g.adminSetPredictionStatus(t,'V-SF1','受付中');
+ assert.equal(g.adminGetOverview(t).data.state.predictionOpenedAt,opened); // 「受付中に戻す」では開始時刻を変えない
+ assert.equal(g.submitPrediction('P01','V-SF1','A').ok,true);
+ const r=g.adminSaveMatch(t,'V-SF1',25,10).data;
+ assert.equal(r.predictionClosed,true);assert.equal(r.match.predictionStatus,'公開');
+ assert.equal(g.submitPrediction('P01','V-SF1','B').error.code,'PREDICTION_CLOSED');
+ assert.equal(g.getPrediction('P01').data.hit.overall,100);
+ assert.equal(e.app.getSheetByName('予想公開').getLastRow(),1); // 予想公開シートはもう使わない
+});
+test('予想:素早く変えたとき、古い送信があとから届いても最後に押したものが残る',()=>{
+ const e=world(),g=e.ctx;g.selectSelf('P01');g.adminSetPredictionStatus(e.token,'V-SF1','受付中');
+ assert.equal(g.submitPrediction('P01','V-SF1','A',1000).data.myChoice,'A');
+ assert.equal(g.submitPrediction('P01','V-SF1','B',3000).data.myChoice,'B');
+ assert.equal(g.submitPrediction('P01','V-SF1','A',2000).data.myChoice,'B'); // 2番目に押したものが遅れて届いた
+ assert.equal(g.readPredictions_(true).filter(p=>p.participantId==='P01')[0].choice,'B');
+ assert.equal(g.submitPrediction('P01','V-SF1','A',4000).data.myChoice,'A');
+ assert.equal(g.submitPrediction('P01','V-SF1','B').data.myChoice,'B'); // 番号なし(古い画面)は今までどおり上書き
 });
 test('後続バレーの予想・公開履歴を削除し、バド関連ドッジも取消',()=>{
  const e=world(),g=e.ctx,t=e.token;

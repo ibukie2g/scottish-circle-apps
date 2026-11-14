@@ -33,7 +33,7 @@ google.script.run
 | `NOT_QUIZ_MODE` | クイズの時間でないのに startQuiz | 待ち画面に戻る |
 | `NO_QUIZ` | 問題がないのに submitQuiz | startQuiz からやり直す |
 | `QUIZ_CLOSED` | 結果公開のあとに submitQuiz | 「受付は終わりました」 |
-| `PREDICTION_*` | 予想できない(下の reason と同じ後半) | message を出す |
+| `PREDICTION_*` | 予想できない(下の reason と同じ後半) | message を出す。`PREDICTION_CLOSED` は「予想は締め切られました」 |
 | `BUSY` | 書き込みが混んでいる(20秒待っても順番が来ない) | 少し待って再送 |
 | `AUTH` | 運営:パスワード違い・トークン切れ | ログイン画面に戻る |
 | `FORBIDDEN` | エディタ専用の関数を画面から呼んだ | (画面からは呼ばない) |
@@ -155,13 +155,21 @@ data = { saved: true }
 予想の画面。`matchId` を省くと、状態の「予想の試合ID」(= getState().prediction.id)。mode が '予想' の間、getState と一緒に4秒ごとに呼んでよい(10秒キャッシュ)。
 ```js
 data = {
-  match: null | { id, sport, round, team1, team2, score1, score2, status, predictionStatus, related },
+  match: null | { id, sport, round, team1, team2, status, predictionStatus, related }, // 点数は入れない
   myTeam: 'C',
   canPredict: true | false,       // いま予想(または変更)できるか
-  reason: null | 'NO_MATCH' | 'TEAMS_UNKNOWN' | 'PLAYING' | 'NOT_OPEN' | 'CLOSED' | 'REVEALED',
+  reason: null | 'NO_MATCH' | 'TEAMS_UNKNOWN' | 'PLAYING' | 'NOT_OPEN' | 'CLOSED',
   myChoice: null | 'A',           // 自分の予想
-  revealed: true | false,         // 自分のチームの予想人数を見せてよいか
-  counts: null | [ { team: 'A', count: 5 }, { team: 'B', count: 3 } ], // 自分のチームの人数(revealed のときだけ)
+  revealed: true | false,         // 締め切られて、人数の集計を見せてよいか
+  teams: null | [                 // 予想した2チームの人数だけの集計(revealed のときだけ。自分のチームが先)
+    { team: 'C', counts: [ { team: 'A', count: 4 }, { team: 'B', count: 2 } ] },
+    { team: 'D', counts: [ { team: 'A', count: 1 }, { team: 'B', count: 5 } ] }
+  ],
+  counts: null | [ ... ],         // teams のうち自分のチームの counts(前の形との互換用)
+  hit: null | {                   // 的中率(%)。試合が確定してから。どちらが勝ったかは返さない
+    overall: 41.7,                // 2チーム合計
+    teams: [ { team: 'C', rate: 66.7, predicted: 6 }, { team: 'D', rate: 16.7, predicted: 6 } ] // 予想者なしは rate: null
+  },
   progress: { predicted: 6, arrived: 8 } // 自分のチームの来場者のうち予想した人数
 }
 ```
@@ -169,20 +177,21 @@ data = {
 |---|---|---|
 | `PLAYING` | 自分のチームの試合 | 予想画面を出さず待ち画面のまま |
 | `NOT_OPEN` | 受付前 | 「まもなく受付」 |
-| `CLOSED` | 運営が締め切った(=公開) | counts を表示 |
-| `REVEALED` | チーム全員がそろって公開された。自分はもう変更できない | counts を表示 |
+| `CLOSED` | 締め切った(運営が締め切ったか、点数が確定した) | teams を表示。確定後は hit も |
 | `TEAMS_UNKNOWN` / `NO_MATCH` | 対戦が未定・試合がない | 待ち画面 |
 
-- `revealed` は「運営が締め切った」か「チームの来場者全員が予想した」とき true
-- 予想したら「あなたは🔴Aの勝ちを予想しました!応援しよう!」(`myChoice`)
+- **締め切るまで、人数の内訳はだれにも返さない**(`teams`・`counts` は null)。チーム全員がそろっても自動では公開しない(2026-11-13)
+- 予想したら「あなたは🔴Aの勝ちを予想しました!応援しよう!」(`myChoice`)。締め切りまで何回でも変えられる
 
-### submitPrediction(participantId, matchId, winnerTeam)
-予想を送る。公開されるまでは何度でも上書きできる。
+### submitPrediction(participantId, matchId, winnerTeam, seq?)
+予想を送る。締め切るまでは何度でも上書きできる。
 ```js
-submitPrediction('P06', 'V-SF1', 'A')
+submitPrediction('P06', 'V-SF1', 'A', Date.now())
 data = (getPrediction と同じ形。送ったあとの最新)
 ```
-- できないときは `PREDICTION_PLAYING` / `PREDICTION_NOT_OPEN` / `PREDICTION_CLOSED` / `PREDICTION_REVEALED` / `PREDICTION_TEAMS_UNKNOWN` / `PREDICTION_NO_MATCH`
+- `seq`:端末で押した時刻(ミリ秒)。前に受け取った番号より古い送信は、書かずに今の状態を返す(素早く変えたとき、遅れて届いた古い送信で上書きしないため)。省くと必ず上書き
+- 画面側は、送信を1本ずつにする(送っている間に押したものは、前の送信が終わってから送る)
+- できないときは `PREDICTION_PLAYING` / `PREDICTION_NOT_OPEN` / `PREDICTION_CLOSED` / `PREDICTION_TEAMS_UNKNOWN` / `PREDICTION_NO_MATCH`
 - `winnerTeam` が対戦チームでなければ `INVALID`
 
 ### startQuiz(participantId)
@@ -271,6 +280,7 @@ data = { token: 'xxxxxxxx-...', expiresInSec: 21600 }
 data = {
   state: {
     mode, currentEvent, nextEvent, predictionMatchId: 'V-SF1' | '',
+    predictionOpenedAt: ms | null, // 予想の受付を始めた時刻(経過時間の表示に使う)
     quizStartedAt: ms | null, updatedAt: ms | null,
     quiz: null | { startedAt, nameEndsAt, originEndsAt, nameSeconds, originSeconds },
     modes: ['待ち', '予想', 'クイズ', '結果待ち', '結果公開']
@@ -308,7 +318,8 @@ adminSaveMatch(token, 'V-SF1', 25, 20)
 data = {
   match: { ...確定後の試合 },
   changes: [ { id: 'V-F', team1: 'A', team2: 'C' }, { id: 'V-3RD', team1: 'B', team2: 'D' } ], // 自動で埋めた組み合わせ
-  teams: [ ...集計(adminGetScores の teams と同じ形、ただし率なし) ]
+  teams: [ ...集計(adminGetScores の teams と同じ形、ただし率なし) ],
+  predictionClosed: true | false // 予想が受付中だったので、自動で締め切った
 }
 ```
 - 点数は0以上の数。バド・バレーは引き分け不可(`INVALID`)。対戦チームが未定なら `INVALID`
@@ -323,8 +334,8 @@ data = {
 
 ### adminSetPredictionStatus(token, matchId, status)
 予想の受付。`status`:
-- `'受付中'`:受付開始。**あわせて mode を '予想'、予想の試合IDをこの試合にする**
-- `'公開'`:締め切り。全チームの予想人数が見られるようになり、変更できなくなる
+- `'受付中'`:受付開始。**あわせて mode を '予想'、予想の試合IDをこの試合にし、受付開始時刻を記録する**(「受付中に戻す」では開始時刻を変えない)
+- `'公開'`:締め切り。予想した2チームに人数の集計が見えるようになり、変更できなくなる。**全員がそろっても自動では締め切らない**。受付中のまま adminSaveMatch で点数を確定すると、自動で締め切る
 - `'受付前'` / `'なし'`:戻す
 
 試合が終わったら mode を `'待ち'` に戻すのは adminSetState で。
@@ -337,12 +348,16 @@ data = (adminGetPredictionSummary と同じ形)
 ```js
 data = {
   match: { ... },
+  closed: false,                 // 締め切ったか
+  openedAt: ms | null,           // 受付を始めた時刻(状態の予想の試合IDがこの試合のとき)
   teams: [ // 試合に出ていない2チーム
     { team: 'C', arrived: 8, predicted: 6, complete: false,
-      counts: [ { team: 'A', count: 4 }, { team: 'B', count: 2 } ] }, ...
-  ]
+      counts: null | [ { team: 'A', count: 4 }, { team: 'B', count: 2 } ] }, ... // 締め切るまで counts は null(運営にも内訳は見せない)
+  ],
+  hit: null | { overall: 41.7, teams: [ { team: 'C', rate: 66.7, predicted: 6 }, ... ] } // 試合が確定してから
 }
 ```
+- 締め切り前に運営画面でも内訳を見たいときは、`api_admin.js` の `PREDICTION_ADMIN_SEES_COUNTS` を true にする
 
 ### adminStartQuiz(token, options?)
 クイズ開始:mode を 'クイズ'、クイズ開始時刻を今にして、全員分の問題を作る(すでに作った人の問題はそのまま)。もう一度押すと開始時刻が今になる(やり直し)。

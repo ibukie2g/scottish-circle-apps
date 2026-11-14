@@ -175,7 +175,7 @@ function getPrediction(participantId, matchId) {
 }
 
 function predictionView_(participantId, matchId, fresh) {
-  // fresh は「予想」と「予想公開」だけに使う(30人が同時に送るので、読み直すシートを少なくする)。
+  // fresh は「予想」だけに使う(30人が同時に送るので、読み直すシートを少なくする)。
   // 参加者・状態・試合は、運営が書くたびにキャッシュが消えるので、キャッシュで十分
   var parts = readParticipants_();
   var me = findParticipant_(parts, toStr_(participantId));
@@ -190,6 +190,8 @@ function predictionView_(participantId, matchId, fresh) {
     myChoice: null,
     revealed: false,
     counts: null,
+    teams: null,
+    hit: null,
     progress: null
   };
   if (!m) { view.reason = 'NO_MATCH'; return view; }
@@ -201,56 +203,69 @@ function predictionView_(participantId, matchId, fresh) {
   var predictedIds = preds.map(function (p) { return p.participantId; });
   var done = arrived.filter(function (p) { return predictedIds.indexOf(p.id) >= 0; }).length;
   view.progress = { predicted: done, arrived: arrived.length };
-  var teamComplete = arrived.length > 0 && done === arrived.length;
-  // 公開の記録は、まだ記録されていないときだけロックを取って書く(ふだんはロックなしで読む)
-  var shouldPublish = m.predictionStatus === '公開' || (m.predictionStatus === '受付中' && teamComplete);
-  if (shouldPublish && !predictionPublished_(m.id, me.team, fresh)) withLock_(function () { publishPrediction_(m.id, me.team); });
-  view.revealed = shouldPublish || predictionPublished_(m.id, me.team, fresh);
-  if (view.revealed && m.team1 && m.team2) {
-    var teamPreds = preds.filter(function (p) { return p.team === me.team; });
-    view.counts = [m.team1, m.team2].map(function (t) {
-      return { team: t, count: teamPreds.filter(function (p) { return p.choice === t; }).length };
+
+  var playing = me.team === m.team1 || me.team === m.team2;
+  var closed = predictionClosed_(m);
+  // 締め切るまで、予想の中身(人数の内訳)はだれにも返さない。全員がそろっても自動では公開しない(2026-11-13)
+  view.revealed = closed && !playing && !!(m.team1 && m.team2);
+  if (view.revealed) {
+    // 予想した2チームの人数だけの集計(名前は出さない)。自分のチームを先に
+    var teams = TEAMS.filter(function (t) { return t !== m.team1 && t !== m.team2; });
+    teams.sort(function (a, b) { return (a === me.team ? 0 : 1) - (b === me.team ? 0 : 1); });
+    view.teams = teams.map(function (t) {
+      return { team: t, counts: predictionCounts_(m, preds.filter(function (p) { return p.team === t; })) };
     });
+    view.counts = view.teams[0] && view.teams[0].team === me.team ? view.teams[0].counts : null;
+    // 試合が確定したら的中率(全体とチームごと)。どちらが勝ったかは返さない
+    view.hit = predictionHitView_(m, preds);
   }
 
   if (!m.team1 || !m.team2) view.reason = 'TEAMS_UNKNOWN';
-  else if (me.team === m.team1 || me.team === m.team2) view.reason = 'PLAYING';
-  else if (m.predictionStatus === '公開') view.reason = 'CLOSED';
+  else if (playing) view.reason = 'PLAYING';
+  else if (closed) view.reason = 'CLOSED';
   else if (m.predictionStatus !== '受付中') view.reason = 'NOT_OPEN';
-  else if (view.revealed) view.reason = 'REVEALED';
   else view.canPredict = true;
   return view;
 }
 
-/** 予想を送る(公開までは上書き可) */
-function submitPrediction(participantId, matchId, winnerTeam) {
+/**
+ * 予想を送る(締め切るまでは何度でも上書き可)
+ * @param {number} [seq] 端末で押した順番(押した時刻のミリ秒)。古い送信があとから届いても、新しい予想を上書きしない
+ */
+function submitPrediction(participantId, matchId, winnerTeam, seq) {
   return api_(function () {
     var winner = normTeam_(winnerTeam);
-    // ロックなし:行を足すだけにして、読むときに同じ人・同じ試合の最新の行を使う(30人同時でも待たせない)
-    return (function () {
-      var view = predictionView_(participantId, matchId, true);
-      if (!view.canPredict) {
-        var msg = {
-          NO_MATCH: '予想する試合がありません', TEAMS_UNKNOWN: 'まだ対戦チームが決まっていません',
-          PLAYING: '自分のチームの試合は予想できません', CLOSED: '予想は締め切られました',
-          NOT_OPEN: '予想の受付はまだです', REVEALED: 'チームの予想が公開されたので変更できません'
-        }[view.reason] || '予想できません';
-        throw appError_('PREDICTION_' + view.reason, msg);
-      }
-      var m = view.match;
-      if (winner !== m.team1 && winner !== m.team2) throw appError_('INVALID', '勝つチームは ' + m.team1 + ' か ' + m.team2 + ' です');
-      var pid = toStr_(participantId);
-      // 自分専用の行:予想のある試合ごとに100行の区画、その中の自分の行
-      var me = requireParticipant_(pid);
-      var block = readMatches_().filter(function (x) { return x.predictionStatus !== 'なし'; })
-        .map(function (x) { return x.id; }).indexOf(m.id);
-      writeSlotRow_(sheet_(SH_PREDICTIONS), block >= 0 ? slotRow_(me, block, SLOT_BLOCK) : -1, { '試合ID': m.id, '参加者ID': pid },
-        { '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
-      invalidate_([SH_PREDICTIONS]);
-      // 予想した人は来ている
-      if (me.arrivedAt === null) markArrived_(me);
-      return predictionView_(pid, m.id, true);
-    })();
+    // ロックなし:自分専用の行に書くだけ(30人同時でも待たせない)
+    var view = predictionView_(participantId, matchId, true);
+    if (!view.canPredict) {
+      var msg = {
+        NO_MATCH: '予想する試合がありません', TEAMS_UNKNOWN: 'まだ対戦チームが決まっていません',
+        PLAYING: '自分のチームの試合は予想できません', CLOSED: '予想は締め切られました',
+        NOT_OPEN: '予想の受付はまだです'
+      }[view.reason] || '予想できません';
+      throw appError_('PREDICTION_' + view.reason, msg);
+    }
+    var m = view.match;
+    if (winner !== m.team1 && winner !== m.team2) throw appError_('INVALID', '勝つチームは ' + m.team1 + ' か ' + m.team2 + ' です');
+    var pid = toStr_(participantId);
+    var me = requireParticipant_(pid);
+    // 素早く変えたとき:古い送信が遅れて届いたら、書かずに今の状態を返す(最後に押したものを残す)
+    var n = toNumOrNull_(seq);
+    var seqKey = 'predSeq:' + m.id + ':' + pid;
+    if (n !== null) {
+      var last = toNumOrNull_(cache_().get(seqKey));
+      if (last !== null && last > n) return predictionView_(pid, m.id, true);
+      cache_().put(seqKey, String(n), NEAR_CACHE_SEC);
+    }
+    // 自分専用の行:予想のある試合ごとに100行の区画、その中の自分の行
+    var block = readMatches_().filter(function (x) { return x.predictionStatus !== 'なし'; })
+      .map(function (x) { return x.id; }).indexOf(m.id);
+    writeSlotRow_(sheet_(SH_PREDICTIONS), block >= 0 ? slotRow_(me, block, SLOT_BLOCK) : -1, { '試合ID': m.id, '参加者ID': pid },
+      { '試合ID': m.id, '参加者ID': pid, 'チーム': view.myTeam, '予想(勝つチーム)': winner, '更新時刻': new Date() });
+    invalidate_([SH_PREDICTIONS]);
+    // 予想した人は来ている
+    if (me.arrivedAt === null) markArrived_(me);
+    return predictionView_(pid, m.id, true);
   });
 }
 

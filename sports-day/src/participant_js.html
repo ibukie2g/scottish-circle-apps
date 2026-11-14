@@ -119,6 +119,8 @@
     intro: null,                   // 自己紹介の入力内容
     pred: null,                    // getPrediction の data
     predBusy: false, predSending: '', predErr: '',
+    predWant: '',                  // 押したけれど、まだ送っていない予想(前の送信が終わったら送る)
+    predEpoch: 0,                  // 予想を押すたびに増やす(古い取得の返事を捨てるため)
     quiz: null,                    // { key, phase, data, names, origin, result, err, needRestart }
     review: null,                  // { loading, err }
     survey: { fun: 0, talked: 0, again: '', comment: '', err: '', sending: false },
@@ -257,7 +259,7 @@
       if (m === 'クイズ' && inSub) S.sub = null;           // クイズは全員同時なので画面を切り替える
       else if (inSub && m === '予想') S.banner = '勝敗予想が始まったよ!予想する →';
       else if (inSub && m === '結果公開') S.banner = '結果が発表されたよ!見る →';
-      if (m !== '予想') { S.pred = null; S.predErr = ''; }
+      if (m !== '予想') { S.pred = null; S.predErr = ''; S.predWant = ''; }
     }
     if (S.pid) {
       if (m === '予想') fetchPrediction();
@@ -449,12 +451,15 @@
 
   // ============ 勝敗予想 ============
   function fetchPrediction() {
-    if (S.predBusy || S.predSending) return;
+    if (S.predBusy || S.predSending || S.predWant) return;
     S.predBusy = true;
+    var epoch = S.predEpoch;
     var mid = S.state && S.state.prediction ? S.state.prediction.id : undefined;
     call('getPrediction', mid ? [S.pid, mid] : [S.pid], function (d) {
       S.predBusy = false;
       if (mode() !== '予想') return;
+      /* 取りにいっている間に押した予想があれば、古い返事は使わない */
+      if (epoch !== S.predEpoch || S.predSending || S.predWant) return;
       S.pred = d;
       render();
     }, function (err) {
@@ -462,24 +467,44 @@
       handleCommonErr(err);
     }, 20000);
   }
+  /*
+   * 予想を押したとき。締め切りまで何度でも変えられる。
+   * 送信は1本ずつ:送っている間に押したものは S.predWant に置き、前の送信が終わってから送る。
+   * 押した時刻を番号として付けるので、遅れて届いた古い送信はサーバーが捨てる(最後に押したものが残る)
+   */
   function submitPrediction(team) {
     var p = S.pred, m = p && p.match;
-    if (!m || !p.canPredict || S.predSending) return;
-    S.predSending = team; S.predErr = '';
+    if (!m || !p.canPredict) return;
+    S.predEpoch++;
+    S.predWant = team; S.predErr = '';
     render(true);
-    call('submitPrediction', [S.pid, m.id, team], function (d) {
+    pumpPrediction();
+  }
+  function pumpPrediction() {
+    var p = S.pred, m = p && p.match;
+    if (S.predSending || !S.predWant || !m) return;
+    var team = S.predWant;
+    S.predWant = '';
+    if (p.myChoice === team) { render(true); return; }
+    S.predSending = team;
+    call('submitPrediction', [S.pid, m.id, team, Date.now()], function (d) {
       S.predSending = '';
+      if (S.predWant) { pumpPrediction(); return; }
       S.pred = d;
       toast(team + 'チームの勝ちを予想したよ!');
       render(true);
     }, function (err) {
       S.predSending = '';
       if (handleCommonErr(err)) return;
-      S.predErr = err.message;
+      if (S.predWant && err.code !== 'PREDICTION_CLOSED') { pumpPrediction(); return; }
+      S.predWant = '';
+      S.predErr = err.code === 'PREDICTION_CLOSED' ? '予想は締め切られました'
+        : err.network ? '送れたか確かめています。少し待ってね' : err.message;
       render(true);
       fetchPrediction();
     });
   }
+  function pctText(n) { return n === null || n === undefined ? '−' : Math.round(n) + '%'; }
 
   VIEWS.predict = function () {
     var p = S.pred, m = (p && p.match) || (S.state && S.state.prediction);
@@ -492,33 +517,47 @@
     if (!p) return h + spinner('予想の受付を確認中…');
     var r = p.reason;
     if (r === 'NOT_OPEN') h += '<div class="card center"><p class="msg">まもなく受付!<br>ちょっと待ってね</p></div>';
-    var canPick = p.canPredict && !S.predSending;
+    var canPick = p.canPredict;
+    var picked = S.predWant || S.predSending || p.myChoice;
+    var busy = !!(S.predWant || S.predSending);
     [m.team1, m.team2].forEach(function (t) {
-      var chosen = p.myChoice === t || S.predSending === t;
-      var dim = (p.myChoice || S.predSending) && !chosen;
+      var chosen = picked === t;
+      var dim = picked && !chosen;
       h += '<button type="button" class="team-btn bg-' + esc(t) + (chosen ? ' chosen' : '') + (dim ? ' dim' : '') + '" data-act="predict" data-team="' + esc(t) + '"' +
         (canPick ? '' : ' disabled') + '>' + (chosen ? '✓ ' : '') + esc(teamLabel(t)) + 'の勝ち<span class="arrow">›</span></button>';
     });
-    if (S.predSending) h += '<p class="muted center">送信中…</p>';
+    if (busy) h += '<p class="muted center">送信中…</p>';
     if (S.predErr) h += '<p class="err center">' + esc(S.predErr) + '</p>';
-    if (p.myChoice) {
-      h += '<div class="card center"><p class="msg">あなたは ' + teamPill(p.myChoice) + ' の勝ちを<br>予想しました!応援しよう!</p>' +
-        (p.canPredict ? '<p class="muted small" style="margin:6px 0 0">チームの予想が公開されるまでは変えられるよ</p>' : '') + '</div>';
+    if (picked) {
+      h += '<div class="card center"><p class="msg">あなたは ' + teamPill(picked) + ' の勝ちを<br>予想しました!応援しよう!</p>' +
+        (p.canPredict ? '<p class="muted small" style="margin:6px 0 0">締め切りまで、何回でも変えられるよ</p>' : '') + '</div>';
     } else if (r === 'CLOSED') {
       h += '<div class="card center"><p class="msg">予想は締め切られました</p></div>';
     }
-    if (p.progress) {
+    if (p.revealed && p.teams) {
+      /* 締め切り後:予想した2チームの人数だけの集計(名前は出さない) */
+      h += '<div class="card"><div class="center h3"><span class="spark">みんなの予想</span></div>';
+      p.teams.forEach(function (tm) {
+        h += '<div class="pred-team"><div class="who">' + teamPill(tm.team) + '</div><div class="counts">';
+        (tm.counts || []).forEach(function (c) {
+          h += '<div class="tint-' + esc(c.team) + '">' + esc(c.team) + 'の勝ち<b>' + esc(c.count) + '</b>人</div>';
+        });
+        h += '</div></div>';
+      });
+      h += '</div>';
+      if (p.hit) {
+        /* 試合が確定したら的中率。どちらが勝ったかは、ここには出さない */
+        h += '<div class="card center"><div class="h3"><span class="spark">的中率</span></div>' +
+          '<p class="hit-all"><b>' + esc(pctText(p.hit.overall)) + '</b></p><div class="hit-teams">';
+        (p.hit.teams || []).forEach(function (tm) {
+          h += '<span>' + teamPill(tm.team) + ' ' + esc(pctText(tm.rate)) + '</span>';
+        });
+        h += '</div></div>';
+      }
+    } else if (p.progress) {
       h += '<div class="card tight progress">' + PEOPLE_SVG + '<span class="lbl">チームの予想<br>入力済み</span>' +
         '<span class="big">' + esc(p.progress.predicted) + '<small style="font-size:22px">/' + esc(p.progress.arrived) + '人</small></span></div>';
-    }
-    if (p.revealed && p.counts) {
-      h += '<div class="card"><div class="center h3"><span class="spark">チームの予想</span></div><div class="counts">';
-      p.counts.forEach(function (c) {
-        h += '<div class="tint-' + esc(c.team) + '">' + esc(c.team) + 'の勝ち<b>' + esc(c.count) + '</b>人</div>';
-      });
-      h += '</div></div>';
-    } else if (p.myChoice) {
-      h += '<p class="muted center small">チーム全員がそろうか、締め切られたら人数が見られるよ</p>';
+      if (picked) h += '<p class="muted center small">みんなの予想は、締め切られたら人数だけ見られるよ</p>';
     }
     return h;
   };

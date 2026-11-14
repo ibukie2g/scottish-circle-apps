@@ -15,6 +15,7 @@ function readState_(fresh) {
     nextEvent: toStr_(kv['次の種目']),
     predictionMatchId: toStr_(kv['予想の試合ID']),
     quizStartedAt: toMs_(kv['クイズ開始時刻']),
+    predictionOpenedAt: toMs_(kv['予想の受付開始時刻']),
     updatedAt: toMs_(kv['更新時刻'])
   };
 }
@@ -249,8 +250,32 @@ function displayName_(people, id) {
   return p && p.name ? p.name : id;
 }
 
-/** その試合の予想と公開の記録を消す(ロックの中で使う)。
- *  予想は「自分専用の行」に書くので、行を詰めずにその試合の行だけを空にする */
+/**
+ * 予想を締め切ったか(本番前の変更 2)。運営が締め切った(予想の状態=公開)か、受付中のまま試合が確定した
+ * (シートを直接確定にしたときも、締め切ったものとして扱う)
+ */
+function predictionClosed_(m) {
+  return m.predictionStatus === '公開' || (m.predictionStatus === '受付中' && m.status === MATCH_CONFIRMED);
+}
+
+/** 人数の集計 [{team: 勝つと予想したチーム, count}] */
+function predictionCounts_(m, preds) {
+  return [m.team1, m.team2].filter(function (x) { return x; }).map(function (x) {
+    return { team: x, count: preds.filter(function (p) { return p.choice === x; }).length };
+  });
+}
+
+/** 的中率を画面用(%・小数第1位)にする。試合が確定していなければ null */
+function predictionHitView_(m, preds) {
+  var h = predictionHitRates(m, preds);
+  if (!h) return null;
+  var pc = function (x) { return x === null ? null : round1(x * 100); };
+  return { overall: pc(h.overall), teams: h.teams.map(function (t) { return { team: t.team, rate: pc(t.rate), predicted: t.predicted }; }) };
+}
+
+/** その試合の予想を消す(ロックの中で使う)。
+ *  予想は「自分専用の行」に書くので、行を詰めずにその試合の行だけを空にする。
+ *  「予想公開」シートは 2026-11-13 から使っていないが、古い行が残っていれば一緒に消す */
 function clearMatchPredictions_(mid) {
   [SH_PREDICTIONS, '予想公開'].forEach(function (name) {
     var t = readTable_(name, true);
@@ -260,18 +285,4 @@ function clearMatchPredictions_(mid) {
     hit.forEach(function (r) { sh.getRange(r._row, 1, 1, t.headers.length).clearContent(); });
     invalidate_([name]);
   });
-  cache_().removeAll(TEAMS.map(function (team) { return pubKey_(mid, team); }));
-}
-/** 公開した目印(キャッシュ)。そろった瞬間に何人もが同時に公開しようとしても、ロックを1回で済ませる */
-function pubKey_(mid, team) { return 'pub:' + mid + ':' + team; }
-function predictionPublished_(mid, team, fresh) {
-  if (cache_().get(pubKey_(mid, team))) return true;
-  return readTable_('予想公開', fresh).rows.some(function (r) { return r['試合ID'] === mid && r['チーム'] === team; });
-}
-function publishPrediction_(mid, team) {
-  if (!predictionPublished_(mid, team, true)) {
-    appendRows_('予想公開', [{'試合ID': mid, 'チーム': team}]);
-    invalidate_(['予想公開']);
-  }
-  cache_().put(pubKey_(mid, team), '1', NEAR_CACHE_SEC);
 }

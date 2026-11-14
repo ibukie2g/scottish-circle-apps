@@ -49,7 +49,7 @@ test('setup: シートと初期データ', () => {
   assert.ok(roster.getSheetByName('自己紹介'));
   assert.ok(roster.getSheetByName('当日追加'));
   // 状態のキーは重複しない
-  assert.equal(app.getSheetByName('状態').getLastRow(), 7);
+  assert.equal(app.getSheetByName('状態').getLastRow(), 8);
   // Webアプリから(持ち主以外が)呼ぶと拒否
   ctx.__activeUser = '';
   assert.throws(() => ctx.setup());
@@ -110,19 +110,40 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(pv.revealed, false);
   pv = ok(g.submitPrediction('P06', 'V-SF1', 'B')); // 公開前は上書き可
   assert.equal(pv.myChoice, 'B');
-  pv = ok(g.submitPrediction('P07', 'V-SF1', 'A')); // C の全員(2人)がそろった
-  assert.equal(pv.revealed, true);
-  assert.deepEqual(pv.counts, [{ team: 'A', count: 1 }, { team: 'B', count: 1 }]);
-  assert.equal(g.submitPrediction('P07', 'V-SF1', 'B').error.code, 'PREDICTION_REVEALED');
+  pv = ok(g.submitPrediction('P07', 'V-SF1', 'A')); // C の全員(2人)がそろっても、公開しない・変更できる
+  assert.equal(pv.revealed, false);
+  assert.equal(pv.counts, null);
+  assert.equal(pv.teams, null);
+  assert.deepEqual(pv.progress, { predicted: 2, arrived: 2 });
+  assert.equal(ok(g.submitPrediction('P07', 'V-SF1', 'B')).myChoice, 'B');
+  assert.equal(ok(g.submitPrediction('P07', 'V-SF1', 'A')).myChoice, 'A');
   ok(g.submitPrediction('P08', 'V-SF1', 'A'));
-  assert.equal(ok(g.getPrediction('P08')).revealed, false); // D はまだ1人
-  ok(g.adminSetPredictionStatus(token, 'V-SF1', '公開'));
-  assert.equal(ok(g.getPrediction('P08')).revealed, true);
+  // 締め切るまで、内訳は運営にも返さない
+  let sum = ok(g.adminGetPredictionSummary(token, 'V-SF1'));
+  assert.equal(sum.closed, false);
+  assert.equal(typeof sum.openedAt, 'number');
+  assert.deepEqual(sum.teams.map(t => [t.team, t.predicted, t.counts]), [['C', 2, null], ['D', 1, null]]);
+  sum = ok(g.adminSetPredictionStatus(token, 'V-SF1', '公開'));
+  assert.deepEqual(sum.teams[0].counts, [{ team: 'A', count: 1 }, { team: 'B', count: 1 }]);
+  // 締め切ったら、予想した2チームに人数だけの集計(自分のチームが先)
+  pv = ok(g.getPrediction('P08'));
+  assert.equal(pv.revealed, true);
+  assert.equal(pv.reason, 'CLOSED');
+  assert.deepEqual(pv.teams, [
+    { team: 'D', counts: [{ team: 'A', count: 1 }, { team: 'B', count: 0 }] },
+    { team: 'C', counts: [{ team: 'A', count: 1 }, { team: 'B', count: 1 }] }
+  ]);
+  assert.equal(pv.hit, null); // 的中率は試合が確定してから
+  assert.equal(ok(g.getPrediction('P01')).teams, null); // 試合に出ているチームには出さない
   assert.equal(g.submitPrediction('P09', 'V-SF1', 'A').error.code, 'PREDICTION_CLOSED');
 
   // 試合
   assert.equal(g.adminSaveMatch(token, 'V-SF1', 20, 20).error.code, 'INVALID'); // トーナメントは引き分け不可
   ok(g.adminSaveMatch(token, 'V-SF1', 25, 20)); // A勝ち
+  // 確定したら的中率(全体 2/3、C 1/2、D 1/1)
+  assert.deepEqual(ok(g.getPrediction('P06')).hit, {
+    overall: 66.7, teams: [{ team: 'C', rate: 50, predicted: 2 }, { team: 'D', rate: 100, predicted: 1 }]
+  });
   st = ok(g.getState());
   assert.equal(st.sportsHidden, false);
   assert.equal(st.sports.find(t => t.team === 'A').volleyball, 28);

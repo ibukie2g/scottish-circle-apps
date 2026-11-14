@@ -370,6 +370,26 @@ function computePredictionPoints(matches, predictions, settings) {
 }
 
 /**
+ * 1試合の予想の的中率(本番前の変更 2)。試合が確定(引き分け以外)していなければ null
+ * @param {object} m 試合
+ * @param {{team:string, choice:string}[]} predictions その試合の予想
+ * @return {{overall:(number|null), teams:{team:string, rate:(number|null), predicted:number}[]}|null}
+ *   rate は 0〜1。予想した人がいなければ null。teams は試合に出ていないチーム
+ */
+function predictionHitRates(m, predictions) {
+  var r = matchResult(m);
+  if (!r || r.draw) return null;
+  var all = 0, allOk = 0;
+  var teams = TEAMS.filter(function (t) { return t !== m.team1 && t !== m.team2; }).map(function (t) {
+    var mine = (predictions || []).filter(function (p) { return p.team === t; });
+    var ok = mine.filter(function (p) { return p.choice === r.winner; }).length;
+    all += mine.length; allOk += ok;
+    return { team: t, rate: mine.length ? ok / mine.length : null, predicted: mine.length };
+  });
+  return { overall: all ? allOk / all : null, teams: teams };
+}
+
+/**
  * 全部の集計
  * @param {{matches:object[], settings:object, quizAnswers:object[], odai:object[], predictions:object[]}} input
  * @return {{teams: object[], detail: object}}
@@ -414,6 +434,7 @@ if (typeof module !== 'undefined' && module.exports) {
     computeQuizPoints: computeQuizPoints,
     computeOdaiPoints: computeOdaiPoints,
     computePredictionPoints: computePredictionPoints,
+    predictionHitRates: predictionHitRates,
     computeAll: computeAll
   };
 }

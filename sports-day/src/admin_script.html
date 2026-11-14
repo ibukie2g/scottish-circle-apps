@@ -303,6 +303,9 @@
   setInterval(function () {
     var els = document.querySelectorAll('[data-clock]');
     for (var i = 0; i < els.length; i++) els[i].textContent = quizClockText();
+    /* 予想の受付を始めてからの経過時間 */
+    var es = document.querySelectorAll('[data-elapsed]');
+    for (var k = 0; k < es.length; k++) es[k].textContent = elapsedText(es[k].getAttribute('data-elapsed'));
   }, 1000);
 
   // ============ 画面の中の操作(まとめて受ける) ============
@@ -700,11 +703,13 @@
         });
         S.scores = null;
         var msg = (wasConfirmed ? '修正しました ' : '確定しました ') + r.match.team1 + ' ' + r.match.score1 + '-' + r.match.score2 + ' ' + r.match.team2;
+        if (r.predictionClosed) { msg += '/予想も締め切りました'; delete S.pred[id]; }
         if (r.changes && r.changes.length) {
           msg += '/自動で入れた対戦:' + r.changes.map(function (c) { var x = matchById(c.id); return (x ? x.sport + x.round : c.id) + ' ' + c.team1 + '-' + c.team2; }).join('、');
         }
         showStatus('ok', msg);
         render();
+        loadPredSummaries();
       }
     });
   };
@@ -746,8 +751,11 @@
       h += '<button class="btn block accent" data-act="predOpen" data-id="' + esc(m.id) + '">予想の受付を開始</button>';
       h += '<p class="sub" style="margin:4px 0 0">押すと、試合に出ていないチームのスマホが予想の画面になります。</p>';
     } else if (ps === '受付中') {
-      h += '<button class="btn block big ng" data-act="predClose" data-id="' + esc(m.id) + '">締め切って公開</button>';
-      h += '<p class="sub" style="margin:4px 0 0">試合が始まって3分くらいで締め切ります。</p>';
+      var s = S.pred[m.id];
+      var opened = (s && s.openedAt) || (st.predictionMatchId === m.id ? st.predictionOpenedAt : null);
+      h += '<div class="row"><button class="btn big ng grow" data-act="predClose" data-id="' + esc(m.id) + '">締め切る</button>' +
+        (opened ? '<span class="elapsed">受付から<br><b data-elapsed="' + esc(opened) + '">' + esc(elapsedText(opened)) + '</b></span>' : '') + '</div>';
+      h += '<p class="sub" style="margin:4px 0 0">試合が始まって数分で締め切ります。全員そろっても自動では締め切りません。点数を確定したときは自動で締め切ります。</p>';
     } else if (ps === '公開') {
       h += '<button class="link-btn" data-act="predReopen" data-id="' + esc(m.id) + '">受付中に戻す</button>';
     }
@@ -758,6 +766,7 @@
     }
     return h;
   }
+  function elapsedText(openedAt) { return mmss(Math.max(0, (now() - Number(openedAt)) / 1000)); }
   function predSummaryHtml(m) {
     var s = S.pred[m.id];
     if (!s) return '<p class="sub">集まり具合を読み込み中…</p>';
@@ -765,8 +774,14 @@
     (s.teams || []).forEach(function (t) {
       h += '<div class="pred-team">' + teamChip(t.team) + '<span>予想 <b style="font-size:20px">' + t.predicted + '</b> / 来場 ' + t.arrived + '人</span>' +
         (t.complete ? '<span class="badge done">そろった</span>' : '') +
-        '<span class="sub" style="margin-left:auto">' + (t.counts || []).map(function (c) { return esc(c.team) + '勝ち ' + c.count; }).join('・') + '</span></div>';
+        '<span class="sub" style="margin-left:auto">' + (t.counts
+          ? t.counts.map(function (c) { return esc(c.team) + '勝ち ' + c.count; }).join('・')
+          : '内訳は締め切り後') + '</span></div>';
     });
+    if (s.hit) {
+      h += '<p style="margin:6px 0 0">的中率 全体 <b style="font-size:20px">' + pct(s.hit.overall) + '</b>(' +
+        (s.hit.teams || []).map(function (t) { return esc(t.team) + ' ' + pct(t.rate); }).join('・') + ')</p>';
+    }
     h += '<button class="link-btn" data-act="predRefresh" data-id="' + esc(m.id) + '">↻ 集まり具合を更新</button>';
     return h;
   }
@@ -797,7 +812,7 @@
       onOk: function (d) {
         S.pred[id] = d;
         replaceMatch(d.match);
-        if (status === '受付中') { S.ov.state.mode = '予想'; S.ov.state.predictionMatchId = id; }
+        if (status === '受付中') { S.ov.state.mode = '予想'; S.ov.state.predictionMatchId = id; S.ov.state.predictionOpenedAt = d.openedAt; }
         render();
         loadOverview(function () { safeRender(); });
       }
@@ -807,7 +822,7 @@
   ACTIONS.predReopen = function (el) { setPredStatus(el.getAttribute('data-id'), '受付中', el, '受付中に戻しました'); };
   ACTIONS.predClose = function (el) {
     var m = matchById(el.getAttribute('data-id'));
-    confirmBox('予想を締め切って公開しますか？', matchLabel(m) + '(' + m.team1 + ' vs ' + m.team2 + ')の予想を締め切ります。全チームの予想人数が見られるようになり、もう変更できません。', '締め切って公開', function () {
+    confirmBox('予想を締め切りますか？', matchLabel(m) + '(' + m.team1 + ' vs ' + m.team2 + ')の予想を締め切ります。予想した2チームに人数の集計が出て、もう変更できません。', '締め切る', function () {
       setPredStatus(m.id, '公開', null, '予想を締め切りました');
     }, true);
   };

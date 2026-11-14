@@ -5,6 +5,10 @@
 
 var ADMIN_TOKEN_SEC = 21600; // 6時間(CacheService の上限)
 
+// 予想を締め切る前に、運営画面にも人数の内訳を出すか。
+// false = 出さない(「締め切るまで、予想の中身はだれにも見えない」。運営も参加者なので)。true にすると運営画面だけ内訳が見える
+var PREDICTION_ADMIN_SEES_COUNTS = false;
+
 // ============ ログイン ============
 
 /** パスワードを確かめてトークンを返す */
@@ -73,7 +77,8 @@ function adminGetOverview(token) {
 function stateForAdmin_(st, settings) {
   return {
     mode: st.mode, currentEvent: st.currentEvent, nextEvent: st.nextEvent,
-    predictionMatchId: st.predictionMatchId, quizStartedAt: st.quizStartedAt, updatedAt: st.updatedAt,
+    predictionMatchId: st.predictionMatchId, predictionOpenedAt: st.predictionOpenedAt,
+    quizStartedAt: st.quizStartedAt, updatedAt: st.updatedAt,
     quiz: st.quizStartedAt ? quizTiming_(st, settings) : null,
     modes: MODES
   };
@@ -149,12 +154,16 @@ function adminSaveMatch(token, matchId, score1, score2) {
       if ((m.sport === SPORT_BADMINTON || m.sport === SPORT_VOLLEY) && s1 === s2) {
         throw appError_('INVALID', 'トーナメントの試合は引き分けにできません');
       }
-      updateRow_(SH_MATCHES, m._row, { '点数1': s1, '点数2': s2, '状態': MATCH_CONFIRMED });
+      var values = { '点数1': s1, '点数2': s2, '状態': MATCH_CONFIRMED };
+      // 予想を締め切る前に点数を確定したら、自動で締め切る(本番前の変更 2)
+      var autoClosed = m.predictionStatus === '受付中';
+      if (autoClosed) { values['予想の状態'] = '公開'; m.predictionStatus = '公開'; }
+      updateRow_(SH_MATCHES, m._row, values);
       m.score1 = s1; m.score2 = s2; m.status = MATCH_CONFIRMED;
       var changes = applyDerived_(matches);
       invalidate_([SH_MATCHES]);
       var scores = refreshSummary_();
-      return { match: matchView_(m), changes: changes, teams: scores.teams };
+      return { match: matchView_(m), changes: changes, teams: scores.teams, predictionClosed: autoClosed };
     });
   });
 }
@@ -167,7 +176,7 @@ function applyDerived_(matches) {
     updateRow_(SH_MATCHES, m._row, { 'チーム1': c.team1, 'チーム2': c.team2, '点数1': '', '点数2': '', '状態': MATCH_PLANNED, '予想の状態': m.sport === SPORT_VOLLEY ? '受付前' : 'なし' });
     clearMatchPredictions_(c.id);
   });
-  if (r.changes.length) invalidate_([SH_MATCHES, SH_PREDICTIONS, '予想公開']);
+  if (r.changes.length) invalidate_([SH_MATCHES, SH_PREDICTIONS]);
   return r.changes;
 }
 
@@ -209,7 +218,7 @@ function adminSetMatchTeams(token, matchId, team1, team2) {
 /**
  * 予想の状態を変える
  * - '受付中':受付開始。あわせて状態のモードを「予想」、予想の試合IDをこの試合にする
- * - '公開':締め切り(全チームの予想人数を公開し、変更できなくする)
+ * - '公開':締め切り(予想した2チームに人数の集計を見せ、変更できなくする)
  * - '受付前' / 'なし':元に戻す
  */
 function adminSetPredictionStatus(token, matchId, status) {
@@ -220,12 +229,16 @@ function adminSetPredictionStatus(token, matchId, status) {
       var m = findMatchById_(readMatches_(true), toStr_(matchId));
       if (!m) throw appError_('NOT_FOUND', '試合ID ' + matchId + ' がありません');
       if (s === '受付中' && (!m.team1 || !m.team2)) throw appError_('INVALID', 'まだ対戦チームが決まっていません');
+      var wasOpen = m.predictionStatus === '受付中' || m.predictionStatus === '公開';
       updateRow_(SH_MATCHES, m._row, { '予想の状態': s });
-      if (s === '公開') TEAMS.forEach(function (t) {
-        if (t !== m.team1 && t !== m.team2) publishPrediction_(m.id, t);
-      });
       invalidate_([SH_MATCHES]);
-      if (s === '受付中') writeState_({ 'モード': '予想', '予想の試合ID': m.id });
+      if (s === '受付中') {
+        var cur = readState_(true);
+        var st = { 'モード': '予想', '予想の試合ID': m.id };
+        // 受付を始めた時刻(運営画面の経過時間に使う)。「受付中に戻す」では変えない
+        if (!(wasOpen && cur.predictionMatchId === m.id && cur.predictionOpenedAt)) st['予想の受付開始時刻'] = new Date();
+        writeState_(st);
+      }
       refreshSummary_();
       return predictionSummary_(m.id, true);
     });
@@ -245,6 +258,9 @@ function predictionSummary_(mid, fresh) {
   if (!m) throw appError_('NOT_FOUND', '試合ID ' + mid + ' がありません');
   var parts = readParticipants_(fresh);
   var preds = readPredictions_(fresh).filter(function (p) { return p.matchId === m.id; });
+  var closed = predictionClosed_(m);
+  var showCounts = closed || PREDICTION_ADMIN_SEES_COUNTS;
+  var st = readState_(fresh);
   var teams = TEAMS.filter(function (t) { return t !== m.team1 && t !== m.team2; }).map(function (t) {
     var tp = preds.filter(function (p) { return p.team === t; });
     var arrived = arrivedMembers_(parts, t);
@@ -254,12 +270,16 @@ function predictionSummary_(mid, fresh) {
       arrived: arrived.length,
       predicted: tp.length,
       complete: arrived.length > 0 && arrived.every(function (p) { return ids.indexOf(p.id) >= 0; }),
-      counts: [m.team1, m.team2].filter(function (x) { return x; }).map(function (x) {
-        return { team: x, count: tp.filter(function (p) { return p.choice === x; }).length };
-      })
+      counts: showCounts ? predictionCounts_(m, tp) : null
     };
   });
-  return { match: matchView_(m), teams: teams };
+  return {
+    match: matchView_(m),
+    closed: closed,
+    openedAt: st.predictionMatchId === m.id ? st.predictionOpenedAt : null,
+    teams: teams,
+    hit: closed ? predictionHitView_(m, preds) : null
+  };
 }
 
 // ============ クイズ ============
