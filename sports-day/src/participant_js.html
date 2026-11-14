@@ -537,15 +537,20 @@
     if (S.predSending || !S.predWant || !m) return;
     var team = S.predWant;
     S.predWant = '';
-    if (p.myChoice === team) { render(true); return; }
+    // 同じ選択でも送る。直前の送信が時間切れなら、サーバーでは別の選択に変わっていることがある。
     S.predSending = team;
+    var finished = false;
     call('submitPrediction', [S.pid, m.id, team, Date.now()], function (d) {
+      if (finished) return; // 時間切れ後の古い返事で、次の送信や画面を上書きしない
+      finished = true;
       S.predSending = '';
+      S.pred = d; // 次の選択は、この送信で保存された値と比べる
       if (S.predWant) { pumpPrediction(); return; }
-      S.pred = d;
       toast(team + 'チームの勝ちを予想したよ!');
       render(true);
     }, function (err) {
+      if (finished) return;
+      finished = true;
       S.predSending = '';
       if (handleCommonErr(err)) return;
       if (S.predWant && err.code !== 'PREDICTION_CLOSED') { pumpPrediction(); return; }
