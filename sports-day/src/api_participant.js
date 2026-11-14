@@ -299,8 +299,9 @@ function generateQuestion_(pid, parts, people) {
 }
 
 function questionRow_(q) {
-  // 出身地の問題(対象者・選択肢・正解)はシートに書かず、キャッシュにだけ置く
-  if (!q.originExpired) cachePutJson_('origin:' + q.participantId, { questions: q.originQuestions }, NEAR_CACHE_SEC);
+  // 出身地の問題(対象者・選択肢・正解)はシートに書かず、キャッシュにだけ置く。
+  // 作り直しで残す行(originQuestions を読んでいない)は、キャッシュをそのままにする
+  if (q.originQuestions) cachePutJson_('origin:' + q.participantId, { questions: q.originQuestions }, NEAR_CACHE_SEC);
   return {
     '参加者ID': q.participantId, '名前の対象者ID': q.nameTargets.join(','), '出身地の対象者ID': '',
     '選択肢1': '', '選択肢2': '', '選択肢3': '', '選択肢4': '',
@@ -356,6 +357,7 @@ function startQuiz(participantId) {
         return made;
       });
     }
+    loadOrigin_(q);
     if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
     var people = readPeople_();
     var intros = readIntros_();
@@ -420,6 +422,7 @@ function submitQuiz(participantId, answers) {
     if (cache_().get(doneKey) || findBy_(readQuizAnswers_(), pid)) return accepted();
     var q = findBy_(readQuizQuestions_(), pid) || findBy_(readQuizQuestions_(true), pid);
     if (!q) throw appError_('NO_QUIZ', 'クイズの問題がありません。クイズを始めてから送ってください');
+    loadOrigin_(q);
     if (q.originExpired) throw appError_('NO_QUIZ', '出身地問題が失効しました。運営に再開始を依頼してください');
     var people = readPeople_();
     var intros = readIntros_();
@@ -463,6 +466,9 @@ function quizResult_(pid, fresh) {
   var a = findBy_(readQuizAnswers_(fresh), pid);
   var q = findBy_(readQuizQuestions_(fresh), pid);
   if (!a || !q) return null;
+  // 出身地クイズの問題と、選んだ答えは、この人の分だけキャッシュから読む
+  loadOrigin_(q);
+  a.originAnswers = (cacheGetJson_('originResponse:' + pid) || {}).answers || null;
   var pending = readNearMisses_(fresh).filter(function (n) {
     return n.participantId === pid && n.judgement === JUDGE_PENDING;
   });

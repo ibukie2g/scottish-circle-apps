@@ -128,17 +128,31 @@ function readPredictions_(fresh) {
   });
 }
 
+/**
+ * クイズ問題(名前の対象だけ)。出身地クイズの問題はキャッシュにあるので、必要な1人分だけ loadOrigin_ で読む
+ * (ここで全員分のキャッシュを読むと、30人が同時に startQuiz・submitQuiz したときに 30×30 回の読み取りになる)
+ */
 function readQuizQuestions_(fresh) {
   return readTable_(SH_QUIZ_Q, fresh).rows.map(function (r) {
-    var origin = cacheGetJson_('origin:' + r['参加者ID']);
     return {
       participantId: toStr_(r['参加者ID']),
       nameTargets: splitIds_(r['名前の対象者ID']),
-      originQuestions: (origin || {}).questions || [], // 出身地クイズの問題(makeOriginQuiz の形)。キャッシュにだけ置く
-      originExpired: !origin,
       _row: r._row
     };
   }).filter(function (q) { return q.participantId; });
+}
+
+/**
+ * 1人分の出身地クイズの問題をキャッシュから読んで、問題に付ける
+ * originQuestions = makeOriginQuiz の形、originExpired = キャッシュが消えていた(6時間たった)
+ * 作ったばかりの問題(originQuestions がもう入っている)は読み直さない
+ */
+function loadOrigin_(q) {
+  if (!q || q.originQuestions) return q;
+  var origin = cacheGetJson_('origin:' + q.participantId);
+  q.originQuestions = (origin || {}).questions || [];
+  q.originExpired = !origin;
+  return q;
 }
 
 /**
@@ -181,7 +195,6 @@ function readQuizAnswers_(fresh) {
       halfIds: splitIds_(r['0.5人分と判定した人のID']),        // 0.5人分(運営の判断を足したあと)
       auto: auto,                                             // アプリが自動で決めた分 {参加者ID: 1 | 0.5}
       nameRate: toNumOrNull_(r['名前の正答率']),
-      originAnswers: (cacheGetJson_('originResponse:' + r['参加者ID']) || {}).answers || null, // 選んだ答え(キャッシュにだけ置く)
       originCorrect: os.correct, // 出身地の正解数(問題がなければ null)
       originTotal: os.total,     // 出身地の問題数
       submittedAt: toMs_(r['送信時刻']),

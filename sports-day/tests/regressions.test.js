@@ -310,3 +310,12 @@ test('アンケート:新しい7項目を、列を右に足して保存する',(
  assert.deepEqual([r2[h.indexOf('次にやってほしいイベント')],r2[h.indexOf('次にやってほしいイベント(その他)')],r2[h.indexOf('感想をSNSで紹介してよい')]],['','','']); // 感想がなければSNSの○は付けない
  assert.equal(g.selectSelf('P02').data.surveyDone,true);
 });
+test('状態・集計・クイズの開始と送信で、全員分のキャッシュを1件ずつ読まない(30人同時の負荷対策)',()=>{
+ const e=bigWorld(),g=e.ctx;g.adminStartQuiz(e.token);
+ for(const id of ['P01','P02','P03','P04','P05'])g.submitQuiz(id,{names:[],origin:[]});
+ let n=0;const c=g.CacheService.getScriptCache(),orig=c.get;c.get=k=>{ if(/origin(Response)?:/.test(k))n++; return orig(k); };
+ g.getState();g.adminGetScores(e.token);assert.equal(n,0,'状態と集計では出身地のキャッシュを読まない');
+ g.startQuiz('P06');assert.equal(n,1,'startQuiz は自分の問題だけ読む');
+ n=0;g.submitQuiz('P06',{names:[],origin:[]});assert.equal(n,1,'submitQuiz も自分の問題だけ読む');
+ c.get=orig;
+});
