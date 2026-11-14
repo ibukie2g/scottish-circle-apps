@@ -23,6 +23,7 @@ var SH_SURVEY = 'アンケート';
 var SH_SETTINGS = '設定';
 var SH_SUMMARY = '集計';
 var SH_TIPS = 'ひとこと';
+var SH_BASKET = 'バスケ内訳';
 
 // ---- エラー ----
 

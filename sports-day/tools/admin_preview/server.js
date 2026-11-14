@@ -52,6 +52,7 @@ let failNext = 0; // 次の何回かを通信失敗にする(/fail?n=1)
 
 function page() {
   let html = fs.readFileSync(path.join(SRC, 'admin.html'), 'utf8');
+  html = html.replace(/<\?!=\s*basketballCore\s*\?>/g, require(path.join(SRC, 'core_basket.js')).basketballRoundScores.toString());
   html = html.replace(/<\?!=\s*include\('([\w-]+)'\)\s*\?>/g, (_, f) => fs.readFileSync(path.join(SRC, f + '.html'), 'utf8'));
   const shim = `<script>
   (function () {
@@ -76,6 +77,11 @@ function page() {
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (url.pathname === '/phone') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><meta charset="utf-8"><body style="margin:0;background:#888"><iframe id="phone" src="/" style="width:390px;height:844px;border:0;display:block"></iframe>');
+    return;
+  }
   if (url.pathname === '/' || url.pathname === '/admin') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page());

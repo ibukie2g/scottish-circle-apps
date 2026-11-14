@@ -24,6 +24,7 @@ function appSheets_() {
   [SH_STATE, ['キー', '値']],
   [SH_PARTICIPANTS, ['参加者ID', 'チーム', '来場時刻', '当日追加', 'クイズに含める']],
   [SH_MATCHES, ['試合ID', '種目', '回', 'チーム1', 'チーム2', '点数1', '点数2', '状態', '予想の状態', '関連試合']],
+  [SH_BASKET, ['ラウンド', '前半A', '前半B', '前半C', '前半D', '後半の問題(JSON)', '版', '更新時刻']],
   ['予想公開', ['試合ID', 'チーム']],
   [SH_PREDICTIONS, ['試合ID', '参加者ID', 'チーム', '予想(勝つチーム)', '更新時刻']],
   [SH_QUIZ_Q, ['参加者ID', '名前の対象者ID', '出身地の対象者ID', '選択肢1', '選択肢2', '選択肢3', '選択肢4', '正解']],
@@ -225,7 +226,9 @@ function resetEventData() {
     [SH_PREDICTIONS, '予想公開', SH_QUIZ_Q, SH_QUIZ_A, SH_NEAR, SH_ODAI, SH_SURVEY].forEach(function (name) {
       clearBody_(sheet_(name));
     });
-    log.push('予想・クイズ・惜しい答え・お題カード・アンケートを消しました');
+    // 追加前の環境でもリセットは使える。
+    if (appSs_().getSheetByName(SH_BASKET)) clearBody_(sheet_(SH_BASKET));
+    log.push('予想・クイズ・惜しい答え・お題カード・アンケート・バスケ内訳を消しました');
 
     clearBody_(sheet_(SH_MATCHES));
     appendRows_(SH_MATCHES, initialMatchRows_());

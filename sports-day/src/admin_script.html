@@ -42,6 +42,7 @@
     tab: 'progress',
     sport: null,         // 試合タブで開いている種目
     drafts: {},          // 試合ID → { s1, s2 }(入力中の点数)
+    basket: null,        // ラウンドごとの前半・クイズバスケの入力
     pred: {},            // 試合ID → adminGetPredictionSummary の data
     ev: null,            // 種目の入力中 { cur, next }
     scores: null,        // adminGetScores の data
@@ -183,7 +184,7 @@
       return;
     }
     /* 「最新の状態を確かめる」:いまのタブを取り直す(ログイン前は何もしない) */
-    var check = { label: '最新の状態を確かめる', fn: function () { if (S.token) refreshTab(true); } };
+    var check = { label: '最新の状態を確かめる', fn: opt.check || function () { if (S.token) refreshTab(true); } };
     /* やり直すと結果が変わる操作(クイズ開始は開始時刻が変わる)は、もう一度送らせず、まず状態を確かめる */
     var again = opt.noRetry ? check : function () { callRaw(fn, args, opt); };
     var timedOut = false, settled = false;
@@ -229,7 +230,7 @@
         clearTimeout(timer);
         if (timedOut) return;
         done();
-        showStatus('err', opt.noRetry ? '通信できませんでした。始まったかどうか、まず最新の状態を確かめてください' : '通信できませんでした。電波を確かめてください', again);
+        showStatus('err', opt.noRetry ? '通信できませんでした。処理できたかどうか、まず最新の状態を確かめてください' : '通信できませんでした。電波を確かめてください', again);
         if (opt.onErr) opt.onErr({ code: 'NETWORK', message: String(err && err.message || err) });
       });
     runner[fn].apply(runner, args);
@@ -615,7 +616,16 @@
         sp.icon + ' ' + sp.key + '<br><span style="font-size:11px;font-weight:400">' + done + '/' + list.length + ' 確定</span></button>';
     });
     h += '</div>';
-    if (S.sport === 'バスケ') h += '<div class="note warn">🏀 点数は<b>前半+後半(クイズ)の合計</b>を入れてください。</div>';
+    if (S.sport === 'バスケ') {
+      h += '<div class="card"><h2>🏀 前半・クイズバスケの集計</h2><p class="sub">4チームをまとめて記録し、2試合の合計を自動計算します。</p><div class="seg c3">';
+      [1, 2, 3].forEach(function (r) { h += '<button data-act="basketOpen" data-round="' + r + '">ラウンド' + r + '</button>'; });
+      h += '</div></div>';
+      if (S.basket) {
+        $('tab-matches').innerHTML = h + basketHtml();
+        return;
+      }
+      h += '<div class="note">合計が分かっている試合は、下から直接確定できます。</div>';
+    }
     if (S.sport === 'バド' || S.sport === 'バレー') h += '<div class="note">準決勝が2試合とも確定すると、決勝・3位決定戦の対戦が自動で入ります。引き分けでは確定できません。</div>';
     if (S.sport === 'ドッジ') h += '<div class="note">G-3・G-4 の対戦は、バドの準決勝が2試合とも確定すると自動で入ります。</div>';
     ms.filter(function (m) { return m.sport === S.sport; }).forEach(function (m) { h += matchCard(m); });
@@ -629,6 +639,124 @@
     return 'バスケ';
   }
   ACTIONS.sport = function (el) { S.sport = el.getAttribute('data-v'); renderMatches(); loadPredSummaries(); };
+
+  // ---- バスケ:前半と各問題の正解順 ----
+  function basketScore() { return basketballRoundScores(S.basket.data.input, S.basket.data.courts); }
+  function basketSummaryHtml() {
+    var sc;
+    try { sc = basketScore(); } catch (e) { return '<p class="err">' + esc(e.message) + '</p>'; }
+    var h = '<div class="basket-totals">';
+    TEAMS.forEach(function (t) {
+      h += '<div class="soft' + t + '">' + teamChip(t) + '<b>' + sc.totals[t] + '点</b><small>前半 ' +
+        (sc.input.firstHalf[t] === null ? '未入力' : sc.input.firstHalf[t]) + ' + クイズ ' + sc.quizPoints[t] + '</small></div>';
+    });
+    return h + '</div>';
+  }
+  function basketHtml() {
+    var b = S.basket;
+    if (b.loading) return '<div class="card">内訳を読み込み中…</div>';
+    if (b.err) return '<div class="card"><p class="err">' + esc(b.err) + '</p><button class="btn" data-act="basketReload">保存済みを読み直す</button></div>';
+    var d = b.data;
+    var h = '<div class="card basket-editor"><h2>ラウンド' + d.round + ' の記録</h2>' +
+      '<p class="sub">' + d.courts.map(function (c, i) { return 'コート' + (i + 1) + ': ' + c.join(' 対 '); }).join(' / ') + '</p>' +
+      '<p class="basket-status">' + (b.dirty ? '内訳に未保存の変更があります' : '保存済みの内訳(初回は空欄)') + '</p>' +
+      '<fieldset' + (b.saving ? ' disabled' : '') + '><h3>前半の得点</h3><div class="basket-halves">';
+    TEAMS.forEach(function (t) {
+      h += '<label>' + teamChip(t) + '<input class="t num" type="number" min="0" step="1" inputmode="numeric" aria-label="' + t + 'チームの前半得点" data-in="basketHalf" data-team="' + t + '" value="' + esc(d.input.firstHalf[t]) + '" placeholder="未入力"></label>';
+    });
+    h += '</div><h3>後半のクイズ</h3><p class="sub">正解したチームを、コートごとに順にタップ。不正解は押さず、正解なしは空のまま。選び直すときは同じチームをもう一度押します。</p>';
+    d.input.questions.forEach(function (q, i) {
+      h += '<div class="basket-question"><div class="row"><b>第' + (i + 1) + '問</b><select class="t grow" aria-label="第' + (i + 1) + '問の難しさ" data-chg="basketDifficulty" data-i="' + i + '">';
+      ['かんたん', 'ふつう', 'むずかしい'].forEach(function (v) { h += '<option' + (q.difficulty === v ? ' selected' : '') + '>' + v + '</option>'; });
+      h += '</select></div>';
+      d.courts.forEach(function (court, c) {
+        h += '<p class="sub">コート' + (c + 1) + '</p><div class="row">';
+        court.forEach(function (t) {
+          var rank = q.orders[c].indexOf(t);
+          var pts = { 'かんたん': [2, 1], 'ふつう': [3, 2], 'むずかしい': [5, 3] }[q.difficulty];
+          h += '<button class="btn grow basket-pick soft' + t + (rank >= 0 ? ' on' : '') + '" data-act="basketCorrect" data-i="' + i + '" data-court="' + c + '" data-team="' + t + '">' +
+            teamChip(t) + (rank < 0 ? ' 未正解' : (rank === 0 ? ' 先に正解 ' : ' あとから正解 ') + pts[rank] + '点') + '</button>';
+        });
+        h += '</div>';
+      });
+      h += '</div>';
+    });
+    h += '<p class="sub">問題を追加(難しさはあとから変更できます)</p><div class="row">';
+    ['かんたん', 'ふつう', 'むずかしい'].forEach(function (v) { h += '<button class="btn grow basket-add" data-act="basketAdd" data-difficulty="' + v + '">+ ' + v + '</button>'; });
+    h += '</div>' + (d.input.questions.length ? '<button class="link-btn" data-act="basketRemove">最後の問題を削除</button>' : '') +
+      '<h3>前半 + 後半の合計</h3><div id="basketSummary">' + basketSummaryHtml() + '</div>' +
+      '<p class="sub">途中保存では試合の点数は変わりません。確定時に2試合とも更新します。</p>' +
+      '<button class="btn block ghost" data-act="basketSave">内訳を途中保存</button><button class="btn block big accent" data-act="basketConfirm">合計を2試合に反映して確定</button>' +
+      '<button class="btn block ghost" data-act="basketReload">保存済みを読み直す</button><button class="btn block ghost" data-act="basketClose">試合の一覧へ戻る</button></fieldset></div>';
+    return h;
+  }
+  function loadBasket(round) {
+    S.basket = { round: round, loading: true }; renderMatches();
+    var b = S.basket;
+    api('adminGetBasketballRound', [round], {
+      onOk: function (d) { if (S.basket !== b) return; b.loading = false; b.data = d; renderMatches(); },
+      onErr: function (e) { if (S.basket !== b) return; b.loading = false; b.err = e.message || '内訳を読み込めませんでした'; renderMatches(); }
+    });
+  }
+  function afterBasketDiscard(fn) {
+    if (S.basket && S.basket.saving) return;
+    if (S.basket && S.basket.dirty) confirmBox('未保存の内訳を破棄しますか？', '途中保存していない変更は失われます。', '破棄して進む', fn, true);
+    else fn();
+  }
+  ACTIONS.basketOpen = function (el) { afterBasketDiscard(function () { loadBasket(Number(el.getAttribute('data-round'))); }); };
+  ACTIONS.basketReload = function () { afterBasketDiscard(function () { loadBasket(S.basket.round); }); };
+  // 一覧へ戻るときも未保存の変更を黙って捨てない。
+  ACTIONS.basketClose = function () { afterBasketDiscard(function () { S.basket = null; renderMatches(); }); };
+  function changedBasket(redraw) {
+    S.basket.dirty = true;
+    if (redraw) renderMatches();
+    else {
+      $('basketSummary').innerHTML = basketSummaryHtml();
+      var status = document.querySelector('.basket-status');
+      if (status) status.textContent = '内訳に未保存の変更があります';
+    }
+  }
+  INPUTS.basketHalf = function (el) { S.basket.data.input.firstHalf[el.getAttribute('data-team')] = el.value; changedBasket(false); };
+  CHANGES.basketDifficulty = function (el) { S.basket.data.input.questions[Number(el.getAttribute('data-i'))].difficulty = el.value; changedBasket(true); };
+  ACTIONS.basketAdd = function (el) {
+    if (S.basket.data.input.questions.length >= 30) { showStatus('err', '1ラウンド30問までです'); return; }
+    S.basket.data.input.questions.push({ difficulty: el.getAttribute('data-difficulty'), orders: [[], []] }); changedBasket(true);
+  };
+  ACTIONS.basketRemove = function () { confirmBox('最後の問題を削除しますか？', '最後の問題の正解順も削除します。', '削除する', function () { S.basket.data.input.questions.pop(); changedBasket(true); }, true); };
+  ACTIONS.basketCorrect = function (el) {
+    var order = S.basket.data.input.questions[Number(el.getAttribute('data-i'))].orders[Number(el.getAttribute('data-court'))];
+    var t = el.getAttribute('data-team'), i = order.indexOf(t);
+    if (i < 0) order.push(t); else order.splice(i, 1);
+    changedBasket(true);
+  };
+  function saveBasket(confirm) {
+    var b = S.basket;
+    if (!b || !b.data || b.saving) return;
+    var sc;
+    try { sc = basketScore(); } catch (e) { showStatus('err', e.message); return; }
+    if (confirm && !sc.ready) { showStatus('err', '前半の点数を4チームとも入れてください(0点も入力してください)'); return; }
+    var send = function () {
+      b.saving = true; renderMatches();
+      api('adminSaveBasketballRound', [b.round, sc.input, b.data.revision, confirm], {
+        save: true, noRetry: true,
+        check: function () { ACTIONS.basketReload(); },
+        onOk: function (d) {
+          b.saving = false; b.dirty = false; b.data = d;
+          if (confirm) {
+            d.matches.forEach(function (m) { replaceMatch(m); delete S.drafts[m.id]; }); S.scores = null;
+          }
+          showStatus('ok', confirm ? '2試合の合計を確定しました' : '内訳を途中保存しました');
+          if (S.sport === 'バスケ') renderMatches();
+        },
+        onErr: function (e) { b.saving = false; if (S.sport === 'バスケ') renderMatches(); if (e.code === 'CONFLICT') showStatus('err', e.message); }
+      });
+    };
+    if (!confirm) { send(); return; }
+    var lines = b.data.courts.map(function (c) { return c[0] + ' ' + sc.totals[c[0]] + ' - ' + sc.totals[c[1]] + ' ' + c[1]; });
+    confirmBox('ラウンド' + b.round + ' の2試合を確定しますか？', 'クイズ ' + sc.input.questions.length + '問の記録から計算しました。\n' + lines.join('\n') + '\n\n確定済みの点数も、この合計に置き換わります。', '2試合を確定', send, false);
+  }
+  ACTIONS.basketSave = function () { saveBasket(false); };
+  ACTIONS.basketConfirm = function () { saveBasket(true); };
 
   function draftOf(m) {
     var d = S.drafts[m.id];

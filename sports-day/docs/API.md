@@ -35,6 +35,7 @@ google.script.run
 | `QUIZ_CLOSED` | 結果公開のあとに submitQuiz | 「受付は終わりました」 |
 | `PREDICTION_*` | 予想できない(下の reason と同じ後半) | message を出す。`PREDICTION_CLOSED` は「予想は締め切られました」 |
 | `BUSY` | 書き込みが混んでいる(20秒待っても順番が来ない) | 少し待って再送 |
+| `CONFLICT` | バスケ内訳を別端末などが先に保存した | 未保存の入力を確認し、保存済みを読み直してから修正 |
 | `AUTH` | 運営:パスワード違い・トークン切れ | ログイン画面に戻る |
 | `FORBIDDEN` | エディタ専用の関数を画面から呼んだ | (画面からは呼ばない) |
 | `SETUP` | シートやスクリプト プロパティが未設定 | 運営に知らせる |
@@ -408,6 +409,39 @@ data = {
 - 点数は0以上の数。バド・バレーは引き分け不可(`INVALID`)。対戦チームが未定なら `INVALID`
 - バスケは前半+後半(クイズ)の合計を入れる
 - 準決勝が2試合確定すると、決勝・3位決定戦・ドッジ(G-3, G-4)のチームが自動で入る
+
+### adminGetBasketballRound(token, round)
+
+ラウンド1〜3のバスケ内訳を取得する。運営の試合タブから呼ぶ。
+
+```js
+data = {
+  round: 1, revision: 0,
+  courts: [['A', 'B'], ['C', 'D']],
+  input: { firstHalf: { A: null, B: null, C: null, D: null }, questions: [] },
+  totals: { A: 0, B: 0, C: 0, D: 0 }, quizPoints: { A: 0, B: 0, C: 0, D: 0 },
+  matches: [ /* B-R1-1, B-R1-2。matchViewと同じ */ ]
+}
+```
+
+### adminSaveBasketballRound(token, round, input, revision, confirm)
+
+```js
+adminSaveBasketballRound(token, 1, {
+  firstHalf: { A: 6, B: 4, C: 0, D: 7 },
+  questions: [{ difficulty: 'むずかしい', orders: [['B', 'A'], ['C', 'D']] }]
+}, 0, true)
+// totals = { A: 9, B: 9, C: 5, D: 10 }
+// 戻り値はadminGetBasketballRoundと同じ。revisionは保存ごと+1。
+```
+
+- `confirm=false`:内訳の途中保存だけ。`true`:内訳を保存し、2試合の点数を再計算して確定・集計する。確定済みの試合も置き換える。
+- 前半は0以上の整数。途中保存は空欄・null・省略可。確定は4チームとも必須。クイズ0問も可。
+- `questions` は最大30問。難しさは「かんたん」「ふつう」「むずかしい」。`orders` はコート1・2の2配列。正解したチームをそのコートの先/後の順に記録。正解なしは `[]`、不正解の試行は記録しない。
+- 配点(先/後)は2/1、3/2、5/3点。サーバーとブラウザは `core_basket.js` の同じ純粋関数を使う。ブラウザ用には `doGet` が関数本体を埋め込む。
+- `revision` は取得時の版。別端末などで版が進んだら `CONFLICT`。未保存の入力を確認してから「保存済みを読み直す」。保存時はScriptLockで直列化する。
+- 通信失敗・時間切れ時はそのまま再送せず「最新の状態を確かめる」から保存済み内訳を読み直す。未保存の入力を破棄するときは確認する。
+- 内訳と既存の合計直接入力は独立。直接入力で合計を直しても内訳は逆算しない。内訳から再確定する際は合計を置き換える確認を出す。
 
 ### adminUnconfirmMatch(token, matchId)
 確定を取り消して「予定」に戻す(点数は残る)。`data = { match, teams }`
