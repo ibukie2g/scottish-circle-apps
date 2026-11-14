@@ -145,6 +145,21 @@ test('makeOriginQuiz: C が作れなければ B だけ。出身地が読めな�
   assert.deepEqual(P.makeOriginQuiz(null, null), []);
 });
 
+test('makeOriginQuiz: 少人数で同じ県が3人いても、対象が3人以上なら3問をそろえる', () => {
+  for (const prefs of [
+    ['宮城県', '宮城県', '宮城県', '東京都'],
+    ['宮城県', '宮城県', '宮城県', '東京都', '東京都'],
+    ['福島県', '福島県', '福島県', '福島県']
+  ]) {
+    const mates = prefs.map((pref, i) => mk('P0' + (i + 1), pref));
+    for (let seed = 1; seed <= 100; seed++) {
+      const qs = P.makeOriginQuiz(mates, ALL, seeded(seed));
+      assert.equal(qs.length, 3);
+      checkQuiz(qs, mates);
+    }
+  }
+});
+
 test('scoreOriginAnswers: B は県名、C はぴったり同じ人を選んだら正解', () => {
   const qs = [
     { type: 'B', targetId: 'P01', choices: ['宮城県', '山形県', '福島県', '岩手県'], answer: '宮城県' },

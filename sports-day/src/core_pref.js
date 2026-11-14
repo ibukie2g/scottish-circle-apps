@@ -144,7 +144,11 @@ function makeOriginQuiz(mates, participantPrefs, rng, count) {
   }
   function canC(pref) {
     var k = byPref[pref].length;
+    // Cで複数人を使っても、残りをBで埋めて3問にできる県だけ選ぶ。
+    var unused = known.filter(function (m) { return !used[m.id]; }).length;
+    var remaining = Math.min(count, known.length) - questions.length - 1;
     return k <= ORIGIN_C_MAX_ANSWERS && known.length - k >= ORIGIN_C_CHOICES - k &&
+      unused - k >= remaining &&
       byPref[pref].every(function (id) { return !used[id]; });
   }
   // C の県:2人以上いる県を先に(「〇〇県出身はだれ?(2人)」のほうが盛り上がるので)
