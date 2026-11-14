@@ -8,6 +8,28 @@ function world() {
 }
 const SURVEY={fun:5,talked:4,learned:'1〜2人',best:'バレー',next:['ご飯'],help:'いいよ'}; // アンケートの答え(必須の項目がそろった形)
 const J=x=>JSON.parse(JSON.stringify(x)); // vm の中で作ったオブジェクトを、比べられる形にする
+
+test('その他のスポーツ:20字まで必須、再編集とクイズヒントで詳細を保持し名簿だけに保存',()=>{
+ const e=world(),g=e.ctx;
+ const intro={sports:['バスケ','その他'],sportOther:' サッカー・卓球（部活） ',comment:'よろしく',snsConsent:'載せない'};
+ assert.equal(g.saveIntro('P01',intro).ok,true);
+ let saved=g.getIntro('P01').data;
+ assert.deepEqual(J(saved.intro.sports),intro.sports);
+ assert.equal(saved.intro.sportOther,'サッカー・卓球（部活）');
+ assert.equal(saved.intro.sport,'バスケ・その他（サッカー・卓球（部活））');
+ assert.equal(saved.options.sportOtherMax,20);
+ g.adminStartQuiz(e.token);
+ assert.ok(g.startQuiz('P02').data.names.hints.some(h=>h&&h.sport===saved.intro.sport));
+ assert.ok(!JSON.stringify(e.app.getSheets().map(s=>s.data)).includes('サッカー'));
+ for(const text of ['', '   ', 'あ'.repeat(21)]) assert.equal(g.saveIntro('P01',Object.assign({},intro,{sportOther:text})).error.code,'INVALID');
+ assert.equal(g.saveIntro('P01',Object.assign({},intro,{sportOther:'🏓'.repeat(20)})).ok,true);
+ assert.equal(g.getIntro('P01').data.intro.sportOther,'🏓'.repeat(20));
+ assert.equal(g.saveIntro('P01',Object.assign({},intro,{sports:['バレー'],sportOther:'残さない'})).ok,true);
+ saved=g.getIntro('P01').data.intro;
+ assert.equal(saved.sportOther,'');assert.equal(saved.sport,'バレー');
+ // 旧形式の「その他」も取得できる。再保存時には詳細を入力してもらう。
+ assert.deepEqual(J(g.parseIntroSports('バスケ・その他')),{sports:['バスケ','その他'],sportOther:''});
+});
 function match(e,id) { return e.ctx.adminGetMatches(e.token).data.matches.find(m=>m.id===id); }
 // 名前クイズの全員の締め切りを過ぎたことにする(クイズ開始時刻を10分前にする)
 function endNamePhase(e) { e.app.getSheetByName('状態').data.find(r=>r[0]==='クイズ開始時刻')[1]=new Date(Date.now()-600000); e.ctx.cache_().remove('tbl:状態'); }

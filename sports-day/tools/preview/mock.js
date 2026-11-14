@@ -207,7 +207,10 @@
       if (!it.comment) return err('INVALID', 'ひとことを入れてください');
       var nicks = String(it.nickname || '').split(/[、,，\/／]/).map(function (x) { return x.trim(); }).filter(function (x) { return x; });
       if (nicks.length > 3) return err('INVALID', 'あだ名は3つまでです');
-      intros[pid] = { sport: it.sports.join('・'), comment: it.comment, nickname: nicks.join('、'), snsConsent: it.snsConsent };
+      var other = it.sports.indexOf('その他') >= 0 ? String(it.sportOther || '').trim() : '';
+      if (it.sports.indexOf('その他') >= 0 && !other) return err('INVALID', 'その他のスポーツ名を入れてください');
+      if (Array.from(other).length > 20) return err('INVALID', 'スポーツ名は20字までです');
+      intros[pid] = { sport: it.sports.map(function (s) { return s === 'その他' ? 'その他（' + other + '）' : s; }).join('・'), sports: it.sports.slice(), sportOther: other, comment: it.comment, nickname: nicks.join('、'), snsConsent: it.snsConsent };
       return { ok: true, data: { saved: true } };
     },
     getPrediction: function (pid) {

@@ -180,9 +180,9 @@ function getIntro(participantId) {
     var p = requireParticipant_(participantId);
     var intro = readIntros_()[p.id];
     return {
-      intro: intro ? { sport: intro.sport, comment: intro.comment, nickname: intro.nickname, snsConsent: intro.snsConsent, updatedAt: intro.updatedAt } : null,
+      intro: intro ? Object.assign({ sport: intro.sport, comment: intro.comment, nickname: intro.nickname, snsConsent: intro.snsConsent, updatedAt: intro.updatedAt }, parseIntroSports(intro.sport)) : null,
       options: {
-        sports: INTRO_SPORTS, snsConsent: INTRO_SNS, commentMax: INTRO_COMMENT_MAX,
+        sports: INTRO_SPORTS, sportOtherMax: 20, snsConsent: INTRO_SNS, commentMax: INTRO_COMMENT_MAX,
         nicknameMax: INTRO_NICKNAME_MAX, nicknameCount: NICKNAME_MAX_COUNT
       }
     };
@@ -203,7 +203,10 @@ function saveIntro(participantId, intro) {
     picked = INTRO_SPORTS.filter(function (s) { return picked.indexOf(s) >= 0; }); // 選択肢の順に並べ、重複と不正な値を除く
     if (picked.length === 0) throw appError_('INVALID', 'やっていたスポーツを選んでください');
     if (picked.indexOf('特になし') >= 0 && picked.length > 1) throw appError_('INVALID', '「特になし」はほかのスポーツと一緒に選べません');
-    var sport = picked.join('・');
+    var other = picked.indexOf('その他') >= 0 ? toStr_(intro.sportOther) : '';
+    if (picked.indexOf('その他') >= 0 && !other) throw appError_('INVALID', 'その他のスポーツ名を入れてください');
+    if (Array.from(other).length > 20) throw appError_('INVALID', 'スポーツ名は20字までです');
+    var sport = picked.map(function (s) { return s === 'その他' ? 'その他（' + other + '）' : s; }).join('・');
     var comment = toStr_(intro.comment);
     // あだ名は「、」「,」「/」で区切って3つまで(本番前の変更 4)。「、」でつないで保存する
     var nicks = parseNicknames(intro.nickname);

@@ -96,7 +96,7 @@ Bot.prototype.intro = function () {
   /* あだ名は3割の人が登録する(名前だけ。たまに「、」で区切って2つ) */
   var given = b.name.split(' ')[1] || '', nickname = '';
   if (given && Math.random() < 0.3) nickname = Math.random() < 0.3 ? given + '、' + given + 'ちゃん' : given;
-  call('saveIntro', [b.id, { sports: sports, comment: pick(COMMENTS), nickname: nickname, snsConsent: pick(SNS) }])
+  call('saveIntro', [b.id, { sports: sports, sportOther: sports.indexOf('その他') >= 0 ? '卓球' : '', comment: pick(COMMENTS), nickname: nickname, snsConsent: pick(SNS) }])
     .then(function (r) { b.set(r.ok ? '自己紹介ずみ' : '自己紹介失敗'); if (!r.ok) log(b.id + ' 自己紹介失敗 ' + r.error.code); });
 };
 /* 予想:締め切りまで何度でも変えられるので、3割の人はあとで1回変える。押した時刻を番号(seq)として付ける */

@@ -372,7 +372,8 @@
       var it = d.intro || {};
       S.intro = {
         loading: false, options: d.options, existed: !!d.intro,
-        sel: it.sport ? String(it.sport).split('・').filter(function (s) { return d.options.sports.indexOf(s) >= 0; }) : [],
+        sel: (it.sports || (it.sport ? String(it.sport).split('・') : [])).filter(function (s) { return d.options.sports.indexOf(s) >= 0; }),
+        sportOther: it.sportOther || '',
         comment: it.comment || '', nickname: it.nickname || '', sns: it.snsConsent || '', err: '', saving: false
       };
       if (S.sub === 'intro') render(true);
@@ -401,6 +402,10 @@
         '" data-act="introSport" data-v="' + esc(s) + '">' + esc(s) + '</button>';
     });
     h += '</div></div>';
+    if (it.sel.indexOf('その他') >= 0) {
+      h += '<div class="field"><label class="lbl" for="sportOther">スポーツ名 <span class="req">*</span><small>(20字まで)</small></label>' +
+        '<input id="sportOther" class="input" type="text" data-in="sportOther" value="' + esc(it.sportOther || '') + '" placeholder="例)サッカー、卓球" autocomplete="off"></div>';
+    }
     var cl = charLen(it.comment);
     h += '<div class="field"><div class="lbl">ひとこと <span class="req">*</span><small>(' + commentMax + '字まで)</small></div>' +
       '<input class="input" type="text" data-in="comment" value="' + esc(it.comment) + '" placeholder="例)最近サウナにハマってる" autocomplete="off">' +
@@ -430,6 +435,8 @@
     if (!it || it.saving) return;
     var o = it.options, err = '';
     if (!it.sel.length) err = 'やっていたスポーツを選んでね';
+    else if (it.sel.indexOf('その他') >= 0 && !String(it.sportOther || '').trim()) err = 'その他のスポーツ名を書いてね';
+    else if (it.sel.indexOf('その他') >= 0 && charLen(String(it.sportOther || '').trim()) > 20) err = 'スポーツ名は20字までです';
     else if (!String(it.comment).trim()) err = 'ひとことを書いてね';
     else if (charLen(it.comment.trim()) > (o.commentMax || 20)) err = 'ひとことは' + (o.commentMax || 20) + '字までです';
     else if (charLen(it.nickname.trim()) > (o.nicknameMax || 30)) err = 'あだ名は' + (o.nicknameMax || 30) + '字までです';
@@ -438,7 +445,7 @@
     if (err) { it.err = err; render(true); return; }
     it.saving = true; it.err = '';
     render(true);
-    call('saveIntro', [S.pid, { sports: it.sel.slice(), comment: it.comment.trim(), nickname: it.nickname.trim(), snsConsent: it.sns }], function () {
+    call('saveIntro', [S.pid, { sports: it.sel.slice(), sportOther: it.sel.indexOf('その他') >= 0 ? String(it.sportOther || '').trim() : '', comment: it.comment.trim(), nickname: it.nickname.trim(), snsConsent: it.sns }], function () {
       it.saving = false; it.existed = true;
       if (S.me) { S.me.introDone = true; store.set('me', S.me); }
       if (S.sub === 'intro') S.sub = null;
@@ -1249,6 +1256,7 @@
     sendSurvey: sendSurvey
   };
   var INPUTS = {
+    sportOther: function (el) { S.intro.sportOther = el.value; },
     comment: function (el) {
       S.intro.comment = el.value;
       var c = $('cmtCount'), n = charLen(el.value), max = S.intro.options.commentMax || 20;

@@ -152,7 +152,7 @@ data = {
   options: {
     sports: ['バスケ', 'バレー', 'バドミントン', 'その他', '特になし'],
     snsConsent: ['顔OK', '顔を隠せばOK', '載せない'],
-    commentMax: 20, nicknameMax: 30, nicknameCount: 3
+    commentMax: 20, nicknameMax: 30, nicknameCount: 3, sportOtherMax: 20
   }
 }
 ```
@@ -167,6 +167,7 @@ saveIntro('P01', { sports: ['バスケ', 'バレー'], comment: 'ラーメンが
 data = { saved: true }
 ```
 - `sport`:options.sports のどれか(必須)
+- `sportOther`:「その他」を選択した場合は必須、前後の空白を除いて20文字まで（絵文字も1文字）。未選択なら送信されても保存しない。例: `{ sports: ['バスケ','その他'], sportOther: '卓球' }` → `sport: 'バスケ・その他（卓球）'`。getIntroのintroには再編集用の `sports` 配列と `sportOther` も返す。旧登録の「その他」だけは取得できるが、再保存時はスポーツ名が必要。クイズのヒントは詳細を含むsportを表示する。
 - `comment`:必須、20字まで(「思いつかなければ好きな食べ物でOK」と添える)
 - `nickname`:任意(空文字可)。「、」「,」「/」で区切って3つまで、合わせて30字まで(スペースは区切りにしない)。「、」でつないで保存される。4つ以上は `INVALID`
   - 入力欄の説明:「呼ばれたい呼び方だけを書いてください。いくつかあるときは『、』で区切る。名前と関係ないあだ名がある人はここに書いてね(クイズで正解になります)」。見本は「例)はな、はなちゃん」

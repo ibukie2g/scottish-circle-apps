@@ -20,7 +20,7 @@ function screen() {
   let source = fs.readFileSync(path.join(__dirname, '../src/participant_js.html'), 'utf8').replace(/^<script>/, '').replace(/<\/script>\s*$/, '');
   // 本番コードに公開用の口は追加しない。起動処理だけを外し、通信と予想処理はそのまま動かす。
   source = source.slice(0, source.indexOf('  // ============ はじめ ============')) +
-    '\nrender = function () {}; toast = function () {}; window.testScreen = { S:S, pick:submitPrediction };\n})();';
+    '\nrender = function () {}; toast = function () {}; window.testScreen = { S:S, pick:submitPrediction, openIntro:openIntro, saveIntro:saveIntro, introHtml:VIEWS.intro, actions:ACTIONS, inputs:INPUTS };\n})();';
   vm.runInNewContext(source, ctx);
   const api = ctx.window.testScreen;
   api.S.pid = 'P01'; api.S.state = { mode: '予想' };
@@ -28,6 +28,18 @@ function screen() {
   return { ...api, requests, timers };
 }
 function view(choice) { return { match: { id: 'V-SF1', team1: 'A', team2: 'B' }, canPredict: true, myChoice: choice }; }
+
+test('自己紹介画面:その他だけ入力欄を表示、必須と20字制限、選択解除時は詳細を送らない',()=>{
+ const p=screen();p.openIntro();
+ p.requests[0].ok({intro:{sport:'バスケ・その他（卓球）',sports:['バスケ','その他'],sportOther:'卓球',comment:'よろしく',nickname:'',snsConsent:'載せない'},options:{sports:['バスケ','その他','特になし'],snsConsent:['載せない']}});
+ assert.match(p.introHtml(),/id="sportOther"/);assert.match(p.introHtml(),/value="卓球"/);
+ p.inputs.sportOther({value:' '});p.saveIntro();assert.match(p.S.intro.err,/スポーツ名/);assert.equal(p.requests.length,1);
+ p.inputs.sportOther({value:'あ'.repeat(21)});p.saveIntro();assert.match(p.S.intro.err,/20字/);
+ p.inputs.sportOther({value:'<卓球>'});assert.match(p.introHtml(),/&lt;卓球&gt;/);
+ p.actions.introSport({getAttribute:()=> 'その他'});
+ assert.doesNotMatch(p.introHtml(),/id="sportOther"/);
+ p.saveIntro();assert.equal(p.requests[1].args[1].sportOther,'');
+});
 
 test('予想画面: AからBへ送信中にAへ戻したら、最後のAも送る', () => {
   const p = screen(); p.pick('B'); p.pick('A');

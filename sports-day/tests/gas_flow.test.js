@@ -101,11 +101,11 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   assert.equal(g.saveIntro('P01', { sport: 'バスケ', comment: 'あ'.repeat(21), snsConsent: '顔OK' }).error.code, 'INVALID');
   ok(g.saveIntro('P01', { sport: 'バスケ', comment: '=ラーメンが好き', nickname: 'はな', snsConsent: '顔OK' }));
   ok(g.saveIntro('P01', { sport: 'バレー', comment: 'ラーメンが好き', nickname: 'はな', snsConsent: '顔を隠せばOK' }));
-  ok(g.saveIntro('P02', { sport: 'その他', comment: '犬を飼ってる', snsConsent: '載せない' }));
+  ok(g.saveIntro('P02', { sport: 'その他', sportOther: '卓球', comment: '犬を飼ってる', snsConsent: '載せない' }));
   ok(g.saveIntro('P02', { sports: ['バレー', 'バスケ', 'バスケ'], comment: '犬を飼ってる', snsConsent: '載せない' }));
   // あだ名は「、」「,」「/」で区切って3つまで
-  assert.equal(g.saveIntro('P03', { sports: ['その他'], comment: '散歩が好き', nickname: 'けんけん、たかっち/ケンさん,よっつめ', snsConsent: '載せない' }).error.code, 'INVALID');
-  ok(g.saveIntro('P03', { sports: ['その他'], comment: '散歩が好き', nickname: 'けんけん,たかっち／ケンさん', snsConsent: '載せない' }));
+  assert.equal(g.saveIntro('P03', { sports: ['その他'], sportOther: '卓球', comment: '散歩が好き', nickname: 'けんけん、たかっち/ケンさん,よっつめ', snsConsent: '載せない' }).error.code, 'INVALID');
+  ok(g.saveIntro('P03', { sports: ['その他'], sportOther: '卓球', comment: '散歩が好き', nickname: 'けんけん,たかっち／ケンさん', snsConsent: '載せない' }));
   assert.equal(ok(g.getIntro('P03')).intro.nickname, 'けんけん、たかっち、ケンさん');
   assert.equal(g.saveIntro('P02', { sports: ['特になし', 'バスケ'], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
   assert.equal(g.saveIntro('P02', { sports: [], comment: '犬', snsConsent: '載せない' }).error.code, 'INVALID');
