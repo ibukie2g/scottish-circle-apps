@@ -151,9 +151,12 @@ test('バレー: 取った点数の合計+1勝ごとにボーナス', () => {
   ms = S.fillDerivedMatches(ms).matches; // F: A-D, 3RD: B-C
   setScore(ms, 'V-F', 25, 23);   // A
   setScore(ms, 'V-3RD', 25, 22); // B
-  const r = S.volleyballPoints(ms, 3);
+  const r = S.volleyballPoints(ms, S.DEFAULT_SETTINGS.volleyWinBonus);
+  assert.equal(S.DEFAULT_SETTINGS.volleyWinBonus, 4); // 2026-11-14 決定:勝ちボーナスは +4
   assert.equal(r.complete, true);
-  assert.deepEqual(r.points, { A: 25 + 25 + 6, B: 20 + 25 + 3, C: 18 + 22, D: 25 + 23 + 3 });
+  assert.deepEqual(r.points, { A: 25 + 25 + 8, B: 20 + 25 + 4, C: 18 + 22, D: 25 + 23 + 4 });
+  // 25点マッチでも20点マッチでも、取った点数をそのまま足す
+  assert.equal(S.computeSports(ms, S.DEFAULT_SETTINGS).teams.find(t => t.team === 'A').volleyball, 58);
 });
 
 test('クイズ: 名前7点×平均正答率+出身地3点×正答率。含めない人は除外、回答者なしは0点', () => {

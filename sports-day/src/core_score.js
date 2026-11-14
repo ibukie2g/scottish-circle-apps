@@ -40,7 +40,7 @@ var INITIAL_MATCHES = [
 // 設定の既定値(設定シートに値がないとき)
 var DEFAULT_SETTINGS = {
   rankPoints: [10, 7, 4, 2],
-  volleyWinBonus: 3,
+  volleyWinBonus: 4,
   quizNameMax: 7,
   quizOriginMax: 3,
   odaiAllMatch: 2,

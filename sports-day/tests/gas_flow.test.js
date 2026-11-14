@@ -158,7 +158,7 @@ test('通しの流れ: 名簿 → 名前を選ぶ → 自己紹介 → 予想 �
   });
   st = ok(g.getState());
   assert.equal(st.sportsHidden, false);
-  assert.equal(st.sports.find(t => t.team === 'A').volleyball, 28);
+  assert.equal(st.sports.find(t => t.team === 'A').volleyball, 29); // 25点 + 勝ちボーナス4
   assert.ok(!('quiz' in st.sports[0])); // 仲良しポイントは出さない
   const r2 = ok(g.adminSaveMatch(token, 'V-SF2', 25, 18)); // C勝ち
   assert.deepEqual(r2.changes.map(c => c.id).sort(), ['V-3RD', 'V-F']);
