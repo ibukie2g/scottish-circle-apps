@@ -62,7 +62,12 @@ function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, 
 function call(name, args) {
   var t0 = performance.now();
   return new Promise(function (resolve) {
+    var settled = false;
+    var timer = setTimeout(function () { done(false, 'TIMEOUT', null); }, 30000);
     function done(ok, err, data) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       var t1 = performance.now();
       resolve({ name: name, ms: t1 - t0, ok: ok, err: err, data: data, start: t0, end: t1 });
     }
