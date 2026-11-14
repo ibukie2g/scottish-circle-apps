@@ -23,6 +23,7 @@ td,th{border-bottom:1px solid #eee;padding:2px 8px;text-align:left}
   デモ用の「サクラ」(自動で動く参加者)。テスト用の名簿で使う。
   スクリプト プロパティ DEMO_BOTS が on のときだけ開ける(?page=bots)。本番の前に必ず消すか off にする。
   運営画面の操作(モードの切り替え・試合の確定・クイズ開始・結果公開)に合わせて、サクラが自動で動く。
+  サクラの動き:名前を選ぶ → 自己紹介 → 予想(たまに変える)→ クイズ(名前・出身地3問)→ アンケート → 自分の結果を見る
 -->
 <h3>サクラ(自動参加者)</h3>
 <div class="card">
@@ -40,16 +41,22 @@ td,th{border-bottom:1px solid #eee;padding:2px 8px;text-align:left}
 <div id="log">待機中</div>
 
 <script>
-var RUN = false, BOTS = [], TEAMS = ['A', 'B', 'C', 'D'], ROSTER = {}; // ROSTER: team → [{id,name,kana}]
+/* ROSTER: team → [{id,name,kana}] */
+var RUN = false, BOTS = [], TEAMS = ['A', 'B', 'C', 'D'], ROSTER = {};
 var SPORTS = ['バスケ', 'バレー', 'バドミントン', 'その他', '特になし'];
 var COMMENTS = ['ラーメンが好き', '最近ランニング始めた', '猫を飼ってます', 'カフェ巡りが趣味', 'ゲームが好き', '朝が弱い',
   '辛いもの好き', '映画をよく見る', 'サウナにはまってる', '料理を練習中', '旅行が好き', '甘いもの大好き', '音楽を聴くのが好き', '筋トレ中'];
 var SNS = ['顔OK', '顔を隠せばOK', '載せない'];
+var LEARNED = ['0人', '1〜2人', '3〜5人', '6人以上'];
+var BEST = ['バスケ', 'バド', 'ドッジ', 'バレー', 'クイズ', 'お題カード', '予想'];
+var NEXT = ['クリスマス会', 'ご飯', '雪遊び', 'ミックスチーム大会', 'その他'];
+var HELP = ['いいよ', '内容による', '今回はパス'];
 var state = null, lastMode = '', pollTimer = null;
 
 function $(id) { return document.getElementById(id); }
 function rand(a, b) { return a + Math.random() * (b - a); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function shuffled(arr) { return arr.slice().sort(function () { return Math.random() - 0.5; }); }
 function log(s) {
   var el = $('log');
   el.textContent = new Date().toLocaleTimeString() + ' ' + s + '\n' + (el.textContent === '待機中' ? '' : el.textContent);
@@ -64,10 +71,11 @@ function call(name, args) {
 }
 function later(ms, fn) { setTimeout(function () { if (RUN) fn(); }, ms); }
 
-// ---- サクラ1人分 ----
+/* ---- サクラ1人分 ---- */
 function Bot(id) {
   this.id = id; this.team = ''; this.name = ''; this.status = '待機';
-  this.predicted = {}; this.quizKey = ''; this.surveyDone = false; this.busy = false;
+  this.predicted = {}; this.quizKey = ''; this.quizSent = false;
+  this.surveyStarted = false; this.surveyDone = false; this.sawResult = false; this.resultCalls = 0; this.busy = false;
 }
 Bot.prototype.set = function (s) { this.status = s; renderTable(); };
 
@@ -76,7 +84,7 @@ Bot.prototype.arrive = function () {
   later(rand(0, 15000), function () {
     call('selectSelf', [b.id]).then(function (r) {
       if (!r.ok) { b.set('名前選び失敗'); log(b.id + ' 名前選び失敗 ' + r.error.code); return; }
-      b.team = r.data.team; b.name = r.data.name; b.set('来場');
+      b.team = r.data.team; b.name = r.data.name; b.surveyDone = !!r.data.surveyDone; b.set('来場');
       if (Math.random() < 0.85) later(rand(3000, 25000), function () { b.intro(); });
     });
   });
@@ -85,21 +93,60 @@ Bot.prototype.intro = function () {
   var b = this, sports = [pick(SPORTS.slice(0, 4))];
   if (Math.random() < 0.3) sports.push(pick(SPORTS.slice(0, 4)));
   if (Math.random() < 0.15) sports = ['特になし'];
-  call('saveIntro', [b.id, { sports: sports, comment: pick(COMMENTS), nickname: Math.random() < 0.3 ? b.name.split(' ')[1] || '' : '', snsConsent: pick(SNS) }])
+  /* あだ名は3割の人が登録する(名前だけ。たまに「、」で区切って2つ) */
+  var given = b.name.split(' ')[1] || '', nickname = '';
+  if (given && Math.random() < 0.3) nickname = Math.random() < 0.3 ? given + '、' + given + 'ちゃん' : given;
+  call('saveIntro', [b.id, { sports: sports, comment: pick(COMMENTS), nickname: nickname, snsConsent: pick(SNS) }])
     .then(function (r) { b.set(r.ok ? '自己紹介ずみ' : '自己紹介失敗'); if (!r.ok) log(b.id + ' 自己紹介失敗 ' + r.error.code); });
 };
+/* 予想:締め切りまで何度でも変えられるので、3割の人はあとで1回変える。押した時刻を番号(seq)として付ける */
 Bot.prototype.predict = function (m) {
   var b = this;
   if (!b.team || b.predicted[m.id] || b.team === m.team1 || b.team === m.team2) return;
   b.predicted[m.id] = 'pending';
   later(rand(2000, 40000), function () {
     var choice = Math.random() < 0.55 ? m.team1 : m.team2;
-    call('submitPrediction', [b.id, m.id, choice]).then(function (r) {
-      if (r.ok) { b.predicted[m.id] = choice; b.set('予想:' + choice); }
-      else { b.predicted[m.id] = ''; b.set('予想できず'); log(b.id + ' 予想できず ' + r.error.code); }
-    });
+    b.sendPrediction(m, choice, Math.random() < 0.3);
   });
 };
+Bot.prototype.sendPrediction = function (m, choice, changeLater) {
+  var b = this;
+  call('submitPrediction', [b.id, m.id, choice, Date.now()]).then(function (r) {
+    if (!r.ok) {
+      /* 締め切られたあとは、前に送った予想がそのまま残る */
+      if (b.predicted[m.id] === 'pending') { b.predicted[m.id] = ''; b.set('予想できず'); }
+      if (r.error.code !== 'PREDICTION_CLOSED') log(b.id + ' 予想できず ' + r.error.code);
+      return;
+    }
+    b.predicted[m.id] = choice; b.set('予想:' + choice);
+    if (changeLater) {
+      later(rand(5000, 25000), function () {
+        var open = state && state.mode === '予想' && state.prediction && state.prediction.id === m.id && state.prediction.predictionStatus === '受付中';
+        if (open) b.sendPrediction(m, choice === m.team1 ? m.team2 : m.team1, false);
+      });
+    }
+  });
+};
+/* 名前の答え:フルネーム/名前だけ・名字だけ/「〜さん」付き/少しまちがい を混ぜる */
+function nameAnswer(p) {
+  var kanji = Math.random() < 0.5;
+  var full = kanji ? p.name : p.kana;
+  var parts = full.split(/\s+/);
+  var x = Math.random();
+  if (x < 0.5) return full;
+  if (x < 0.7 && parts.length === 2) return parts[Math.random() < 0.6 ? 1 : 0];   /* 名前だけ・名字だけ(0.5人分) */
+  if (x < 0.85) return (Math.random() < 0.5 && parts.length === 2 ? parts[0] : full) + pick(['さん', '先輩', 'くん', 'ちゃん']);
+  if (full.length > 3) return full.slice(0, -1) + 'の';                            /* 1文字まちがい(運営が判断) */
+  return full;
+}
+/* 出身地クイズの答え:B は選択肢から1つ、C は count 人ぶん選ぶ(問題と同じ順番の配列)。たまに選ばずに時間切れ */
+function originAnswers(origin) {
+  var qs = (origin && origin.questions) || [];
+  return qs.map(function (q) {
+    if (q.type === 'C') return Math.random() < 0.1 ? [] : shuffled(q.choices).slice(0, q.count).map(function (c) { return c.id; });
+    return Math.random() < 0.1 ? '' : pick(q.choices);
+  });
+}
 Bot.prototype.quiz = function (q) {
   var b = this;
   if (!b.team || b.quizKey === String(q.startedAt)) return;
@@ -107,41 +154,70 @@ Bot.prototype.quiz = function (q) {
   later(rand(0, 5000), function () {
     call('startQuiz', [b.id]).then(function (r) {
       if (!r.ok) { b.set('クイズ開けず'); log(b.id + ' クイズ開けず ' + r.error.code); return; }
-      if (r.data.alreadyAnswered) { b.set('クイズ送信ずみ'); return; }
+      if (r.data.alreadyAnswered) { b.quizSent = true; b.set('クイズ送信ずみ'); b.survey(rand(3000, 20000)); return; }
       b.set('クイズ中');
       var d = r.data, mates = (ROSTER[b.team] || []).filter(function (p) { return p.id !== b.id; });
-      // 覚えている人数はばらばら。ひらがな・漢字を混ぜ、たまに1文字まちがえる(惜しい答え)
+      /* 覚えている人数はばらばら */
       var know = Math.round(d.names.count * rand(0.2, 1));
-      var names = mates.slice().sort(function () { return Math.random() - 0.5; }).slice(0, know).map(function (p) {
-        var s = Math.random() < 0.5 ? p.kana : p.name;
-        if (Math.random() < 0.12 && s.length > 3) s = s.slice(0, -1) + 'の';
-        return s;
-      });
-      var origin = d.origin ? pick(d.origin.choices) : '';
-      // 締め切りの少し前までのどこかで送る
+      var names = shuffled(mates).slice(0, know).map(nameAnswer);
+      var origin = originAnswers(d.origin);
+      /* 締め切りの少し前までのどこかで送る */
       var now = Date.now() + ((d.serverNow || Date.now()) - Date.now());
       var until = d.timing ? Math.max(3000, d.timing.nameEndsAt - now - 3000) : 30000;
       later(rand(Math.min(10000, until), until), function () {
         call('submitQuiz', [b.id, { names: names, origin: origin }]).then(function (r2) {
-          if (r2.ok) b.set('クイズ送信:' + r2.data.correctCount + '/' + r2.data.total);
-          else { b.set('クイズ送信失敗'); log(b.id + ' クイズ送信失敗 ' + r2.error.code); }
+          if (r2.ok) {
+            /* 答え合わせは返ってこない。アンケートを送ってから受け取る */
+            b.quizSent = true; b.set('クイズ送信ずみ');
+            b.survey(rand(3000, 20000));
+          } else { b.set('クイズ送信失敗'); log(b.id + ' クイズ送信失敗 ' + r2.error.code); }
         });
       });
     });
   });
 };
-Bot.prototype.survey = function () {
+/* アンケート(送ると、自分の結果が見られる) */
+Bot.prototype.survey = function (delay) {
   var b = this;
-  if (b.surveyDone || !b.team) return;
-  b.surveyDone = true;
-  later(rand(5000, 60000), function () {
-    var fun = pick([3, 4, 4, 5, 5, 5]), talked = pick([2, 3, 3, 4, 4, 5]);
-    call('submitSurvey', [{ fun: fun, talked: talked, again: Math.random() < 0.85 ? 'はい' : 'いいえ', comment: Math.random() < 0.3 ? pick(['楽しかった!', 'またやりたい', 'クイズが難しかった', '']) : '' }, b.id])
-      .then(function (r) { b.set(r.ok ? 'アンケートずみ' : 'アンケート失敗'); });
+  if (!b.team) return;
+  if (b.surveyDone) { b.result(0); return; }
+  if (b.surveyStarted) return;
+  b.surveyStarted = true;
+  later(delay === undefined ? rand(5000, 60000) : delay, function () {
+    var next = NEXT.filter(function () { return Math.random() < 0.35; });
+    var comment = Math.random() < 0.3 ? pick(['楽しかった!', 'またやりたい', 'クイズが難しかった', '']) : '';
+    call('submitSurvey', [{
+      fun: pick([3, 4, 4, 5, 5, 5]), talked: pick([2, 3, 3, 4, 4, 5]), learned: pick(LEARNED), best: pick(BEST),
+      next: next, nextOther: next.indexOf('その他') >= 0 ? 'ボウリング' : '', help: pick(HELP),
+      comment: comment, snsOk: !!comment && Math.random() < 0.5
+    }, b.id]).then(function (r) {
+      if (!r.ok) { b.surveyStarted = false; b.set('アンケート失敗'); log(b.id + ' アンケート失敗 ' + r.error.code); return; }
+      b.surveyDone = true; b.set('アンケートずみ');
+      b.result(0);
+    });
+  });
+};
+/* 自分の結果を受け取る。名前クイズの全員の締め切りまでは出ないので、時間になったら取り直す(3回まで) */
+Bot.prototype.result = function (tries) {
+  var b = this;
+  if (b.sawResult || !b.quizSent || b.busy || b.resultCalls >= 6) return; /* 取り直しは6回まで */
+  b.busy = true; b.resultCalls++;
+  call('getQuizResult', [b.id]).then(function (r) {
+    b.busy = false;
+    if (!r.ok) { log(b.id + ' 結果を受け取れず ' + r.error.code); return; }
+    var d = r.data;
+    if (d.result) {
+      b.sawResult = true;
+      b.set('結果を見た:' + d.result.correctCount + '/' + d.result.total + '人');
+      return;
+    }
+    if (d.availableAt && tries < 3) {
+      later(Math.max(1000, d.availableAt - (d.serverNow || Date.now())) + rand(1000, 4000), function () { b.result(tries + 1); });
+    }
   });
 };
 
-// ---- 全体 ----
+/* ---- 全体 ---- */
 function renderTable() {
   var counts = {};
   BOTS.forEach(function (b) { counts[b.status] = (counts[b.status] || 0) + 1; });
@@ -162,7 +238,8 @@ function onState(s) {
   if (s.mode !== lastMode) { log('モード:' + s.mode); lastMode = s.mode; }
   if (s.mode === '予想' && s.prediction && s.prediction.predictionStatus === '受付中') BOTS.forEach(function (b) { b.predict(s.prediction); });
   if (s.mode === 'クイズ' && s.quiz) BOTS.forEach(function (b) { b.quiz(s.quiz); });
-  if (s.mode === '結果公開') BOTS.forEach(function (b) { b.survey(); });
+  /* クイズが終わったあと:まだの人はアンケートを送り、送った人は自分の結果を見る */
+  if (s.mode === '結果待ち' || s.mode === '結果公開') BOTS.forEach(function (b) { b.survey(); });
 }
 function startBots() {
   if (RUN) return;

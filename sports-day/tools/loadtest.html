@@ -9,13 +9,30 @@
 body{font-family:sans-serif;margin:16px;font-size:14px}
 button{font-size:15px;padding:8px 12px;margin:4px}
 pre{background:#f4f4f4;padding:8px;white-space:pre-wrap;font-size:13px}
+.note{color:#666;font-size:12px;margin:2px 0 8px}
+h4{margin:12px 0 2px}
 </style>
 </head>
 <body>
-<!-- 負荷テスト用ページ。使うときだけ src/ にコピーし、main.js の doGet に「?page=loadtest なら createHtmlOutputFromFile('loadtest')」を一時的に足して clasp push し、/dev のURLで開く。終わったら両方消す。テスト用の名簿(P01〜P30)で使う -->
+<!--
+  負荷テスト用ページ。体育館で30人が同時に使っても待たされないかを確かめる。
+  使い方:
+    1. 使うときだけ src/ にコピーし、main.js の doGet に「?page=loadtest なら createHtmlOutputFromFile('loadtest')」を
+       一時的に足して clasp push し、/dev のURLで開く。終わったら両方消す
+    2. テスト用の名簿(P01〜P30、架空の名前)で使う。本番の名簿では使わない
+       (予想のテストは、P09〜P16・P24〜P30 が C・D チーム = V-SF1(A対B)を予想できる人、という名簿が前提)
+    3. 結果は「回数/失敗の件数(エラーコードごと)/中央値・p95・最大」で出る。p95 = 遅いほうから5%の人が待った時間
+  テストの中身:
+    1〜7  30人が同時に同じ操作をする(開く・名前を選ぶ・自己紹介・予想・クイズ・アンケート)
+    4     30人が4秒ごとに状態を見に行く(40秒)
+    8     30人が4秒ごとに状態を見に行きながら、途中で一斉に書き込む(読み取りと書き込みを分けて集計)
+    9     クイズ開始から問題が表示されるまでの待ち時間(このボタンを押してから、運営画面で「クイズ開始」を押す)
+  終わったら、エディタから resetEventData() を実行して当日のデータを消す
+-->
 <h3>負荷テスト(テスト用名簿 P01〜P30 で使う)</h3>
+<h4>30人が同時に同じ操作</h4>
 <div>
-<button onclick="runAll()">全部まとめて</button>
+<button onclick="runAll()">1〜4 をまとめて</button>
 <button onclick="run(burstStart)">1. 開いた直後</button>
 <button onclick="run(burstSelect)">2. 名前を選ぶ</button>
 <button onclick="run(burstIntro)">3. 自己紹介を保存</button>
@@ -24,38 +41,97 @@ pre{background:#f4f4f4;padding:8px;white-space:pre-wrap;font-size:13px}
 <button onclick="run(burstQuiz)">6. クイズ開始と送信(クイズモードで)</button>
 <button onclick="run(burstSurvey)">7. アンケート</button>
 </div>
+<h4>本番に近い動き</h4>
+<div>
+<button onclick="run(mixedTest)">8. 状態を見ながら、一斉に書き込む(48秒)</button>
+<div class="note">30人が4秒ごとに状態を見に行く。12秒後に自己紹介、24秒後にアンケート、36秒後に「予想モードなら予想/クイズモードならクイズ開始と送信」を30人が同時に送る。</div>
+<button onclick="run(quizWaitTest)">9. クイズ開始から問題が出るまでの待ち時間</button>
+<div class="note">先にこのボタンを押す(モードは「待ち」などクイズ以外にしておく)→ 運営画面で「クイズ開始」を押す。3分たってもクイズにならなければやめる。</div>
+</div>
 <pre id="out">待機中</pre>
 <script>
 var N = 30, PIDS = [];
 for (var i = 1; i <= 30; i++) PIDS.push('P' + ('0' + i).slice(-2));
 var TEAMS = ['A', 'B', 'C', 'D'];
+var POLL_MS = 4000;
 var out = document.getElementById('out');
 function log(s) { out.textContent += '\n' + s; }
+function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
+/* サーバーを1回呼ぶ。{ ms: かかった時間, ok, err: エラーコード, data, start, end } を返す(失敗しても止まらない) */
 function call(name, args) {
   var t0 = performance.now();
   return new Promise(function (resolve) {
+    function done(ok, err, data) {
+      var t1 = performance.now();
+      resolve({ name: name, ms: t1 - t0, ok: ok, err: err, data: data, start: t0, end: t1 });
+    }
     var r = google.script.run
-      .withSuccessHandler(function (res) { resolve({ ms: performance.now() - t0, ok: !!(res && res.ok), err: res && res.error && res.error.code }); })
-      .withFailureHandler(function (e) { resolve({ ms: performance.now() - t0, ok: false, err: 'FAIL:' + (e && e.message || e) }); });
+      .withSuccessHandler(function (res) { done(!!(res && res.ok), res && res.error ? res.error.code : (res ? null : 'EMPTY'), res && res.data); })
+      .withFailureHandler(function (e) { done(false, 'FAIL:' + (e && e.message || e), null); });
     r[name].apply(r, args || []);
   });
 }
-function stats(label, rs, wall) {
-  var ms = rs.map(function (r) { return r.ms; }).sort(function (a, b) { return a - b; });
-  var q = function (p) { return Math.round(ms[Math.min(ms.length - 1, Math.floor(ms.length * p))]) ; };
-  var bad = rs.filter(function (r) { return !r.ok; });
+
+/* 並べた数の p(0〜1)の位置の値。p=0.5 が中央値、p=0.95 が p95 */
+function quantile(sorted, p) {
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * p) - 1))];
+}
+function msText(v) { return v === null ? '-' : Math.round(v) + 'ms'; }
+/* 時間の一覧を「中央値・p95・最大」にする */
+function timeText(values) {
+  var s = values.slice().sort(function (a, b) { return a - b; });
+  return '中央値 ' + msText(quantile(s, 0.5)) + '・p95 ' + msText(quantile(s, 0.95)) + '・最大 ' + msText(s.length ? s[s.length - 1] : null);
+}
+function failText(bad) {
   var errs = {};
-  bad.forEach(function (r) { errs[r.err] = (errs[r.err] || 0) + 1; });
-  log(label + ': ' + rs.length + '回 / 失敗 ' + bad.length + (bad.length ? ' ' + JSON.stringify(errs) : '') +
-    ' / 中央 ' + q(0.5) + 'ms・90% ' + q(0.9) + 'ms・最大 ' + Math.round(ms[ms.length - 1]) + 'ms' +
+  bad.forEach(function (r) { var k = r.err || '不明'; errs[k] = (errs[k] || 0) + 1; });
+  return '失敗 ' + bad.length + '件' + (bad.length ? ' ' + JSON.stringify(errs) : '');
+}
+/* 呼び出しの結果をまとめて1行で出す:回数/失敗の件数(エラーコードごと)/中央値・p95・最大 */
+function stats(label, rs, wall) {
+  var bad = rs.filter(function (r) { return !r.ok; });
+  log(label + ': ' + rs.length + '回 / ' + failText(bad) + ' / ' + timeText(rs.map(function (r) { return r.ms; })) +
     (wall ? ' / 全体 ' + Math.round(wall) + 'ms' : ''));
 }
 function burst(label, make) {
   var t0 = performance.now(), ps = [];
   for (var i = 0; i < N; i++) ps.push(make(i));
-  return Promise.all(ps).then(function (rs) { stats(label, rs, performance.now() - t0); });
+  return Promise.all(ps).then(function (rs) { stats(label, rs, performance.now() - t0); return rs; });
 }
+
+/* ---- 送る中身(名前はすべて架空) ---- */
+function introOf(i) { return { sports: ['バスケ'], comment: 'テスト' + i, nickname: i % 3 === 0 ? 'てすと、てっちゃん' : '', snsConsent: '載せない' }; }
+function surveyOf(i) {
+  return {
+    fun: 5, talked: 4, learned: ['0人', '1〜2人', '3〜5人', '6人以上'][i % 4],
+    best: ['バスケ', 'バド', 'ドッジ', 'バレー', 'クイズ', 'お題カード', '予想'][i % 7],
+    next: i % 2 ? ['ご飯', 'その他'] : ['クリスマス会'], nextOther: i % 2 ? 'テスト' : '',
+    help: ['いいよ', '内容による', '今回はパス'][i % 3], comment: 'テスト' + i, snsOk: false
+  };
+}
+/* 出身地クイズの答え:B は選択肢から1つ、C は count 人ぶん(startQuiz の問題と同じ順番の配列) */
+function originAnswers(quizData) {
+  var qs = (quizData && quizData.origin && quizData.origin.questions) || [];
+  return qs.map(function (q) {
+    if (q.type === 'C') return q.choices.slice(0, q.count).map(function (c) { return c.id; });
+    return q.choices[0];
+  });
+}
+var QUIZ_NAMES = ['架空 太郎', '試験 はなこ', 'みほん いちろ', 'たろうさん', 'てっちゃん'];
+function quizBurst(tag) {
+  var opened = [];
+  return burst(tag + 'a. クイズを開く(startQuiz)30人同時', function (i) {
+    return call('startQuiz', [PIDS[i]]).then(function (r) { opened[i] = r.data; return r; });
+  }).then(function () {
+    return burst(tag + 'b. クイズを送る(submitQuiz)30人同時', function (i) {
+      return call('submitQuiz', [PIDS[i], { names: QUIZ_NAMES, origin: originAnswers(opened[i]) }]);
+    });
+  });
+}
+
+/* ---- 1〜7:30人が同時に同じ操作 ---- */
 function burstStart() {
   return burst('1a. 状態(getState)30人同時', function () { return call('getState'); })
     .then(function () { return burst('1b. 名前一覧(listTeamMembers)30人同時', function (i) { return call('listTeamMembers', [TEAMS[i % 4]]); }); });
@@ -64,44 +140,147 @@ function burstSelect() {
   return burst('2. 名前を選ぶ(selectSelf)30人同時', function (i) { return call('selectSelf', [PIDS[i]]); });
 }
 function burstIntro() {
-  return burst('3. 自己紹介の保存(saveIntro)30人同時', function (i) {
-    return call('saveIntro', [PIDS[i], { sports: ['バスケ'], comment: 'テスト' + i, nickname: '', snsConsent: '載せない' }]);
-  });
+  return burst('3. 自己紹介の保存(saveIntro)30人同時', function (i) { return call('saveIntro', [PIDS[i], introOf(i)]); });
 }
-function pollTest() {
-  // 30人が、それぞれ0〜4秒ずらして4秒ごとに getState を呼ぶ(40秒)
-  var rs = [], end = performance.now() + 40000;
+/* 30人が、それぞれ0〜4秒ずらして4秒ごとに getState を呼ぶ。until() が true になるまで続け、結果を rs に足す */
+function pollers(rs, until, onState) {
   function user(i) {
     return new Promise(function (resolve) {
       function tick() {
-        if (performance.now() > end) return resolve();
-        call('getState').then(function (r) { rs.push(r); setTimeout(tick, 4000); });
+        if (until()) return resolve();
+        call('getState').then(function (r) {
+          rs.push(r);
+          if (onState && r.ok) onState(i, r);
+          setTimeout(tick, POLL_MS);
+        });
       }
-      setTimeout(tick, Math.random() * 4000);
+      setTimeout(tick, Math.random() * POLL_MS);
     });
   }
   var us = [];
   for (var i = 0; i < N; i++) us.push(user(i));
-  return Promise.all(us).then(function () { stats('4. 4秒ごとの更新(30人×40秒)', rs); });
+  return Promise.all(us);
 }
-// 予想:V-SF1(A対B)を予想できる C・D の人(15人)が、それぞれ2回送る
+function pollTest() {
+  var rs = [], end = performance.now() + 40000;
+  return pollers(rs, function () { return performance.now() > end; })
+    .then(function () { stats('4. 4秒ごとの更新(30人×40秒)', rs); });
+}
+/* 予想:V-SF1(A対B)を予想できる C・D の人(15人)が、それぞれ2回(A → B)続けて送る。最後に押した B が残るはず */
 var CD = ['P09','P10','P11','P12','P13','P14','P15','P16','P24','P25','P26','P27','P28','P29','P30'];
-function burstPredict() {
-  return burst('5. 予想を送る(submitPrediction)30回同時', function (i) { return call('submitPrediction', [CD[i % 15], 'V-SF1', i < 15 ? 'A' : 'B']); });
+function predictBurst(tag, matchId) {
+  var seq = Date.now();
+  return burst(tag + ' 予想を送る(submitPrediction)30回同時(15人が A → B の順に2回)', function (i) {
+    return call('submitPrediction', [CD[i % 15], matchId, i < 15 ? 'A' : 'B', i < 15 ? seq : seq + 1]);
+  }).then(function () {
+    return Promise.all(CD.map(function (pid) { return call('getPrediction', [pid, matchId]); }));
+  }).then(function (rs) {
+    var kept = rs.filter(function (r) { return r.ok && r.data && r.data.myChoice === 'B'; }).length;
+    log('   → 最後に押した予想(B)が残った人: ' + kept + '/' + rs.length + '人');
+  });
 }
-function burstQuiz() {
-  return burst('6a. クイズを開く(startQuiz)30人同時', function (i) { return call('startQuiz', [PIDS[i]]); })
-    .then(function () { return burst('6b. クイズを送る(submitQuiz)30人同時', function (i) { return call('submitQuiz', [PIDS[i], { names: ['架空 太郎', '試験 はなこ', 'みほん いちろ'], origin: '福島県' }]); }); });
-}
+function burstPredict() { return predictBurst('5.', 'V-SF1'); }
+function burstQuiz() { return quizBurst('6'); }
 function burstSurvey() {
-  return burst('7. アンケート(submitSurvey)30人同時', function (i) { return call('submitSurvey', [{ fun: 5, talked: 4, again: 'はい', comment: 'テスト' + i }, PIDS[i]]); });
+  return burst('7. アンケート(submitSurvey)30人同時', function (i) { return call('submitSurvey', [surveyOf(i), PIDS[i]]); });
 }
+
+/* ---- 8:30人が状態を見に行きながら、一斉に書き込む ---- */
+function mixedTest() {
+  var reads = [], t0 = performance.now(), end = t0 + 48000;
+  var lastMode = '', lastPrediction = null;
+  var windows = []; /* 書き込みをしていた時間帯 [開始, 終了] */
+  function during(label, fn) {
+    var s = performance.now();
+    log('  ' + Math.round((s - t0) / 1000) + '秒:' + label);
+    return fn().then(function () { windows.push([s, performance.now()]); });
+  }
+  var polling = pollers(reads, function () { return performance.now() > end; }, function (i, r) {
+    lastMode = r.data.mode;
+    lastPrediction = r.data.prediction;
+  });
+  var writing = wait(12000).then(function () {
+    return during('自己紹介を30人が同時に保存', function () {
+      return burst('8a. 自己紹介の保存(saveIntro)30人同時', function (i) { return call('saveIntro', [PIDS[i], introOf(i)]); });
+    });
+  }).then(function () { return wait(Math.max(0, t0 + 24000 - performance.now())); }).then(function () {
+    return during('アンケートを30人が同時に送信', function () {
+      return burst('8b. アンケート(submitSurvey)30人同時', function (i) { return call('submitSurvey', [surveyOf(i), PIDS[i]]); });
+    });
+  }).then(function () { return wait(Math.max(0, t0 + 36000 - performance.now())); }).then(function () {
+    if (lastMode === 'クイズ') return during('クイズを30人が同時に開いて送信', function () { return quizBurst('8c'); });
+    if (lastMode === '予想' && lastPrediction && lastPrediction.predictionStatus === '受付中') {
+      return during('予想を15人が2回ずつ送信(' + lastPrediction.id + ')', function () { return predictBurst('8c.', lastPrediction.id); });
+    }
+    log('  36秒:モードが「' + lastMode + '」なので、3つ目の書き込みはなし(予想モードかクイズモードにすると、予想・クイズも送る)');
+  });
+  return Promise.all([polling, writing]).then(function () {
+    function inWindow(r) {
+      return windows.some(function (w) { return r.end >= w[0] && r.start <= w[1]; });
+    }
+    stats('8. 読み取り(getState)全体', reads);
+    stats('8. 読み取りのうち、書き込みと重なったもの', reads.filter(inWindow));
+    stats('8. 読み取りのうち、書き込みと重ならなかったもの', reads.filter(function (r) { return !inWindow(r); }));
+  });
+}
+
+/* ---- 9:クイズ開始から問題が表示されるまでの待ち時間 ---- */
+function quizWaitTest() {
+  var LIMIT = 180000, t0 = performance.now();
+  log('  運営画面で「クイズ開始」を押してください(3分待ちます)…');
+  /* 1人分:4秒ごとに状態を見て、クイズになったら startQuiz を呼ぶ */
+  function user(i) {
+    return new Promise(function (resolve) {
+      var offset = 0, first = true; /* offset = サーバー時刻 - 端末の時計(getState の返事が届いた時点) */
+      function tick() {
+        if (performance.now() - t0 > LIMIT) return resolve({ status: 'timeout' });
+        call('getState').then(function (r) {
+          if (!r.ok) { setTimeout(tick, POLL_MS); return; }
+          var d = r.data;
+          if (typeof d.serverNow === 'number') offset = d.serverNow - Date.now();
+          if (d.mode !== 'クイズ' || !d.quiz) { first = false; setTimeout(tick, POLL_MS); return; }
+          var already = first; /* 最初に見たときからクイズ中(待ち時間が測れない) */
+          var noticed = Date.now() + offset;
+          call('startQuiz', [PIDS[i]]).then(function (q) {
+            var shown = Date.now() + offset;
+            resolve({
+              status: q.ok ? 'ok' : 'fail', err: q.err, already: already,
+              wait: shown - d.quiz.startedAt,      /* クイズ開始 → 問題が届く */
+              notice: noticed - d.quiz.startedAt,  /* クイズ開始 → 状態の更新で気づく */
+              open: q.ms,                          /* startQuiz の往復 */
+              answered: !!(q.data && q.data.alreadyAnswered)
+            });
+          });
+        });
+      }
+      setTimeout(tick, Math.random() * POLL_MS);
+    });
+  }
+  var us = [];
+  for (var i = 0; i < N; i++) us.push(user(i));
+  return Promise.all(us).then(function (rs) {
+    var ok = rs.filter(function (r) { return r.status === 'ok'; });
+    var fail = rs.filter(function (r) { return r.status === 'fail'; });
+    var timeout = rs.filter(function (r) { return r.status === 'timeout'; }).length;
+    var already = rs.filter(function (r) { return r.already; }).length;
+    if (timeout === rs.length) { log('9. 3分たってもクイズになりませんでした(運営画面で「クイズ開始」を押してからやり直す)'); return; }
+    log('9. クイズ開始 → 問題が表示されるまで: ' + ok.length + '人 / ' + failText(fail) +
+      (timeout ? ' / 時間切れ ' + timeout + '人' : '') + ' / ' + timeText(ok.map(function (r) { return r.wait; })));
+    log('   うち、状態の更新で気づくまで: ' + timeText(ok.map(function (r) { return r.notice; })));
+    log('   うち、問題の受け取り(startQuiz)の往復: ' + timeText(ok.map(function (r) { return r.open; })));
+    if (already) log('   注意: ' + already + '人は、ボタンを押した時点でもうクイズ中でした(その人の待ち時間は、開始からの経過時間になっています)');
+    var answered = ok.filter(function (r) { return r.answered; }).length;
+    if (answered) log('   注意: ' + answered + '人は、もうクイズを送っていました(問題ではなく「送信ずみ」が返っています)');
+    log('   ※時刻は、状態の返事が届いた時点のサーバー時刻とのずれで直しています(通信の片道ぶんの誤差があります)');
+  });
+}
+
 var busy = false;
 function run(fn) {
   if (busy) return;
   busy = true;
   log('--- 開始 ' + new Date().toLocaleTimeString());
-  fn().then(function () { log('--- 終了'); busy = false; });
+  fn().then(function () { log('--- 終了'); busy = false; }, function (e) { log('--- エラーで中断: ' + (e && e.message || e)); busy = false; });
 }
 function runAll() {
   run(function () { return burstStart().then(burstSelect).then(burstIntro).then(pollTest); });
