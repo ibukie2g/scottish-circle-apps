@@ -597,7 +597,8 @@ function getQuizResult(participantId) {
     var answered = !!findBy_(readQuizAnswers_(), pid);
     var sd = surveyDone_(pid);
     var now = Date.now();
-    var nameEndsAt = st.mode === 'クイズ' && st.quizStartedAt ? quizTiming_(st, readSettings_()).nameEndsAt : null;
+    // 進行を早めに「結果待ち」に変えても、全員の名前の締め切りまでは答えを返さない。
+    var nameEndsAt = st.quizStartedAt ? quizTiming_(st, readSettings_()).nameEndsAt : null;
     var waiting = nameEndsAt !== null && now < nameEndsAt;
     return {
       answered: answered,
