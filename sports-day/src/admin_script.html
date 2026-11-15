@@ -1254,6 +1254,11 @@
       h += x.input !== null && x.input !== undefined && x.input !== ''
         ? '<div class="input">「' + esc(x.input) + '」</div>'
         : '<div class="noinput">(入力は表示できません)</div>';
+      var writers = (x.writerIds || []).map(function (id) {
+        var p = (S.ov.participants || []).filter(function (q) { return q.id === id; })[0];
+        return p && p.name ? p.name : id;
+      });
+      if (writers.length) h += '<div class="writer">書いた人:' + esc(writers.join('、')) + '</div>';
       h += '<label class="f" style="margin-top:4px">だれの名前?' + (x.candidateId ? '(アプリの推測が入っています)' : '(候補なし。分かれば選ぶ)') + '</label>';
       h += '<select class="t" data-chg="nearCand" data-i="' + i + '"><option value="">(選ばない)</option>';
       mates.forEach(function (p) {

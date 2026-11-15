@@ -390,13 +390,15 @@ function adminListNearMisses(token, includeJudged) {
           candidateName: n.candidateId ? (cand.name || n.candidateId) : '',
           candidateKana: cand.kana || '',
           judgement: n.judgement,
-          // 「だれの名前?」で選べる人。書いた人全員のクイズに共通して出ていた人だけ(null = 絞らない)。
-          // 書いた人がだれかは返さない
-          choiceIds: null
+          // 「だれの名前?」で選べる人。書いた人全員のクイズに共通して出ていた人だけ(null = 絞らない)
+          choiceIds: null,
+          // 書いた人の参加者ID(名前は運営画面が参加者一覧から出す)
+          writerIds: []
         };
         items.push(g);
       }
       g.numbers.push(n.number);
+      if (g.writerIds.indexOf(n.participantId) < 0) g.writerIds.push(n.participantId);
       g.count++;
       var q = findBy_(questions, n.participantId);
       if (q) {
