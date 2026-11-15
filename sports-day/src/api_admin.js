@@ -366,6 +366,7 @@ function adminListNearMisses(token, includeJudged) {
     // キャッシュが消えていた分だけ、名簿ファイルの控えから読む
     var missing = rows.filter(function (n) { return !cached['near:' + n.number]; }).map(function (n) { return n.number; });
     var saved = readNearInputs_(missing);
+    var questions = rows.length ? readQuizQuestions_(true) : [];
     var groups = {};
     var items = [];
     rows.forEach(function (n) {
@@ -388,12 +389,20 @@ function adminListNearMisses(token, includeJudged) {
           candidateId: n.candidateId,
           candidateName: n.candidateId ? (cand.name || n.candidateId) : '',
           candidateKana: cand.kana || '',
-          judgement: n.judgement
+          judgement: n.judgement,
+          // 「だれの名前?」で選べる人。書いた人全員のクイズに共通して出ていた人だけ(null = 絞らない)。
+          // 書いた人がだれかは返さない
+          choiceIds: null
         };
         items.push(g);
       }
       g.numbers.push(n.number);
       g.count++;
+      var q = findBy_(questions, n.participantId);
+      if (q) {
+        g.choiceIds = g.choiceIds === null ? q.nameTargets.slice()
+          : g.choiceIds.filter(function (id) { return q.nameTargets.indexOf(id) >= 0; });
+      }
     });
     // 未判断を先に、その中では候補があるものを先に
     items.sort(function (a, b) {
@@ -433,7 +442,7 @@ function adminJudgeNearMiss(token, numbers, decision, candidateId) {
       if (d === JUDGE_FULL || d === JUDGE_HALF) {
         targets.forEach(function (n) {
           var c = cand || n.candidateId;
-          if (!c) throw appError_('INVALID', 'だれの答えか選んでください');
+          if (!c) throw appError_('INVALID', 'だれの名前か選んでください');
           var q = findBy_(questions, n.participantId);
           if (q && q.nameTargets.indexOf(c) < 0) throw appError_('INVALID', 'その人は、この答えを書いた人のクイズの対象ではありません');
         });

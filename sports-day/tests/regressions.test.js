@@ -252,6 +252,10 @@ test('運営の判断:同じチームの同じ答えは1回で判断でき、候
  assert.equal(list.pendingCount,3);
  const grp=list.items.find(x=>x.count===2);assert.deepEqual(J(grp.numbers),[101,201]);assert.equal(grp.candidateId,'');
  assert.equal(list.items[0].candidateId!=='',true); // 候補があるものが先
+ // 「だれの名前?」で選べるのは、書いた全員のクイズに共通して出ていた人だけ(書いた本人は出ない)
+ assert.ok(!grp.choiceIds.includes('P01')&&!grp.choiceIds.includes('P02')&&grp.choiceIds.includes('P03'));
+ const one=list.items.find(x=>x.count===1);assert.ok(!one.choiceIds.includes('P03')&&one.choiceIds.includes('P01'));
+ assert.ok(!('participantId' in one)); // 書いた人は返さない
  // 2人まとめて、P03 の 0.5人分にする
  assert.equal(g.adminJudgeNearMiss(t,grp.numbers,'0.5人分','P03').data.updated,2);
  for(const pid of ['P01','P02'])assert.deepEqual(J(g.readQuizAnswers_(true).find(a=>a.participantId===pid).halfIds),['P03']);
