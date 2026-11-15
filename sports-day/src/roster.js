@@ -192,11 +192,10 @@ function rosterNearSheet_(create) {
 function writeNearInputs_(me, items, perPerson) {
   if (!items.length) return;
   try {
-    var sh = rosterNearSheet_(true);
-    items.forEach(function (it, k) {
-      writeSlotRow_(sh, k < perPerson ? slotRow_(me, 0, 0, { per: perPerson, offset: k }) : -1,
-        { '番号': it.number }, { '番号': it.number, '参加者ID': me.id, '書いた名前': it.input, '送信時刻': new Date() });
-    });
+    var now = new Date();
+    writeSlotRows_(rosterNearSheet_(true), slotRow_(me, 0, 0, { per: perPerson, offset: 0 }), items.map(function (it) {
+      return { keys: { '番号': it.number }, obj: { '番号': it.number, '参加者ID': me.id, '書いた名前': it.input, '送信時刻': now } };
+    }), perPerson);
   } catch (e) {
     console.warn('惜しい答えの控えを名簿ファイルに書けませんでした: ' + e);
   }

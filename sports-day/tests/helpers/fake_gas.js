@@ -77,6 +77,7 @@ function makeCache(clock) {
     get: k => (m.has(k) && expiry.get(k) > clock.now ? m.get(k) : null),
     put: (k, v, sec = 10) => { expiry.set(k, clock.now + sec * 1000); if (String(v).length > 100000) throw new Error('too big'); m.set(k, String(v)); },
     remove: k => m.delete(k),
+    putAll(obj, sec = 10) { Object.keys(obj).forEach(k => this.put(k, obj[k], sec)); },
     removeAll: ks => ks.forEach(k => m.delete(k)),
     getAll: ks => { const o = {}; ks.forEach(k => { if (m.has(k) && expiry.get(k) > clock.now) o[k] = m.get(k); }); return o; }
   };

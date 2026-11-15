@@ -435,3 +435,16 @@ test('ひとこと:setup で候補16個を○付きで入れ、「使う」に�
  // 当日のデータを消しても、ひとことは残す
  const e2=world();e2.ctx.resetEventData();assert.equal(e2.app.getSheetByName('ひとこと').getLastRow(),17);
 });
+test('まとめ書き(writeSlotRows_):自分の行にまとめて書き、他人の行は上書きせず下に足す',()=>{
+ const e=world(),g=e.ctx;const sh=g.sheet_(g.SH_NEAR);
+ const ent=n=>({keys:{'番号':n},obj:{'番号':n,'参加者ID':'P01','判定':'未'}});
+ g.writeSlotRows_(sh,2,[ent(101),ent(102)],10);
+ const col=g.readTable_(g.SH_NEAR,true).headers.indexOf('番号');
+ const nums=()=>sh.getRange(2,1,sh.getLastRow()-1,sh.getLastColumn()).getValues().map(r=>String(r[col]));
+ assert.deepEqual(nums().slice(0,2),['101','102']);
+ // 2行目が他人(999)の行なら、そこは残して 103 は下に足す。入りきらない分(3件目以降・maxSlots=2)も下に足す
+ sh.getRange(2,col+1).setValue(999);
+ g.writeSlotRows_(sh,2,[ent(103),ent(102),ent(104)],2);
+ const after=nums();
+ assert.equal(after[0],'999');assert.equal(after[1],'102');assert.ok(after.includes('103')&&after.includes('104'));
+});

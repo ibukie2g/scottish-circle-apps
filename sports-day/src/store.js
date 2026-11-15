@@ -77,6 +77,11 @@ function cache_() {
   return {
     get: function (k) { return c.get(p + k); },
     put: function (k, v, sec) { return c.put(p + k, v, sec); },
+    putAll: function (obj, sec) {
+      var o = {};
+      Object.keys(obj).forEach(function (k) { o[p + k] = obj[k]; });
+      return c.putAll(o, sec);
+    },
     remove: function (k) { return c.remove(p + k); },
     removeAll: function (ks) { return c.removeAll(ks.map(function (k) { return p + k; })); },
     getAll: function (ks) {
@@ -267,6 +272,46 @@ function writeSlotRow_(sh, row, keys, obj) {
     }
   }
   withLock_(function () { sh.appendRow(line); });
+}
+
+/**
+ * 並んだ「自分専用の行」にまとめて書く(writeSlotRow_ の複数行版。ロックなし)。
+ * 1件ずつ書くとシートの読み書きが件数×3回になり、30人同時の送信で順番待ちが長くなる
+ * (2026-11-15 の負荷テストでクイズ送信が中央値23秒)。見出し・今の中身・書き込みを各1回にする。
+ * 先頭の maxSlots 件は firstRow から下の行に、入りきらない分や他人の行だった分はロックを取って下に足す。
+ * @param entries [{keys, obj}] / maxSlots 自分専用の行の数
+ */
+function writeSlotRows_(sh, firstRow, entries, maxSlots) {
+  if (!entries.length) return;
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(toStr_);
+  var lines = entries.map(function (e) {
+    return headers.map(function (h) { return (h in e.obj) ? cellSafe_(e.obj[h]) : ''; });
+  });
+  var n = Math.min(entries.length, maxSlots);
+  var rest = [];
+  if (n > 0 && firstRow >= 2 && firstRow + n - 1 <= sh.getMaxRows()) {
+    var cur = sh.getRange(firstRow, 1, n, headers.length).getValues();
+    var ok = cur.map(function (row, k) {
+      if (row.every(function (v) { return toStr_(v) === ''; })) return true;
+      return Object.keys(entries[k].keys).every(function (key) {
+        var c = headers.indexOf(key);
+        return c >= 0 && toStr_(row[c]) === toStr_(entries[k].keys[key]);
+      });
+    });
+    if (ok.every(function (x) { return x; })) {
+      sh.getRange(firstRow, 1, n, headers.length).setValues(lines.slice(0, n));
+    } else {
+      // まれ(参加者シートを並べ替えたときなど):自分の行だけ書き、残りは下に足す
+      ok.forEach(function (x, k) {
+        if (x) sh.getRange(firstRow + k, 1, 1, headers.length).setValues([lines[k]]);
+        else rest.push(lines[k]);
+      });
+    }
+    rest = rest.concat(lines.slice(n));
+  } else {
+    rest = lines;
+  }
+  if (rest.length) withLock_(function () { rest.forEach(function (line) { sh.appendRow(line); }); });
 }
 
 /**

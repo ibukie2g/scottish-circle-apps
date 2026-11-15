@@ -501,14 +501,17 @@ function submitQuiz(participantId, answers) {
     var pending = j.nearMisses.concat(NEAR_INCLUDE_UNKNOWN
       ? j.unknowns.map(function (input) { return { input: input, candidateId: '' }; }) : []);
     var base = nearMissBase_(pid);
-    var nearSh = pending.length ? sheet_(SH_NEAR) : null;
-    pending.forEach(function (nm, k) {
-      var no = base + k + 1;
+    if (pending.length) {
       // 入力そのものはアプリ用ファイルに書かず、キャッシュに置く(6時間。公開後に判断を直せるように、判断しても消さない)
-      cache_().put('near:' + no, JSON.stringify({ input: nm.input }), NEAR_CACHE_SEC);
-      writeSlotRow_(nearSh, k < NEAR_PER_PERSON ? slotRow_(me, 0, 0, { per: NEAR_PER_PERSON, offset: k }) : -1,
-        { '番号': no }, { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING });
-    });
+      var inputs = {};
+      pending.forEach(function (nm, k) { inputs['near:' + (base + k + 1)] = JSON.stringify({ input: nm.input }); });
+      cache_().putAll(inputs, NEAR_CACHE_SEC);
+      // 1人10行ずつの自分専用の行に、まとめて1回で書く
+      writeSlotRows_(sheet_(SH_NEAR), slotRow_(me, 0, 0, { per: NEAR_PER_PERSON, offset: 0 }), pending.map(function (nm, k) {
+        var no = base + k + 1;
+        return { keys: { '番号': no }, obj: { '番号': no, '参加者ID': pid, '近い候補(参加者ID)': nm.candidateId, '判定': JUDGE_PENDING } };
+      }), NEAR_PER_PERSON);
+    }
     // キャッシュは早く消えることがあるので、名前の控えを名簿ファイルにも書く(個人情報は名簿ファイルにだけ置く)
     writeNearInputs_(me, pending.map(function (nm, k) { return { number: base + k + 1, input: nm.input }; }), NEAR_PER_PERSON);
     invalidate_([SH_QUIZ_A, SH_NEAR]);
