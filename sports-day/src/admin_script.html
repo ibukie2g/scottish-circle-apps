@@ -62,6 +62,7 @@
     walkTeam: '',
     lastImport: null,
     settingsDraft: {},
+    tnDraft: {},           // チーム名の入力中の値(チーム → 文字)
     openDetails: {}      // <details> の data-key → 開いているか
   };
 
@@ -402,6 +403,9 @@
     h += '<p class="sub" style="margin:6px 0 0">いま:' + esc(st.currentEvent || '(なし)') + ' → 次:' + esc(st.nextEvent || '(なし)') + '</p>';
     h += '</div>';
 
+    // チーム名
+    h += '<div class="card">' + det('teamNames') + '<summary>🏷️ チーム名' + (st.teamNameLocked ? '(締め切り済み)' : '(受付中)') + '</summary>' + teamNameForm(st) + '</details></div>';
+
     // 予想
     var pm = st.predictionMatchId ? matchById(st.predictionMatchId) : null;
     if (pm) {
@@ -426,6 +430,47 @@
     h += '<div class="center"><button class="link-btn" data-act="logout">ログアウト</button></div>';
     $('tab-progress').innerHTML = h;
   }
+
+  // ---- チーム名(参加者がチームのだれでも入れられる。運営は直す・消す・締め切る) ----
+  function teamNameForm(st) {
+    var names = st.teamNames || {}, max = st.teamNameMax || 10;
+    var h = '<p class="sub" style="margin:0 0 8px">参加者の画面では、チーム名があれば「Aチーム」の代わりに出ます。運営の画面は A〜D のまま。空にして保存すると消えます。</p>';
+    ['A', 'B', 'C', 'D'].forEach(function (t) {
+      var v = t in S.tnDraft ? S.tnDraft[t] : (names[t] || '');
+      var changed = t in S.tnDraft && S.tnDraft[t].trim() !== (names[t] || '');
+      h += '<div class="row" style="margin:6px 0">' + teamChip(t) +
+        '<input class="t grow" data-in="teamName" data-t="' + t + '" value="' + esc(v) + '" maxlength="' + (max + 5) + '" placeholder="(まだない)">' +
+        '<button class="btn small accent" data-act="saveTeamName" data-t="' + t + '"' + (changed ? '' : ' disabled') + '>保存</button></div>';
+    });
+    h += '<div style="height:6px"></div>';
+    h += st.teamNameLocked
+      ? '<button class="btn block ghost" data-act="lockTeamName" data-v="0">受付を再開する(参加者が変えられるようにする)</button>'
+      : '<button class="btn block accent" data-act="lockTeamName" data-v="1">チーム名を締め切る</button>';
+    h += '<p class="sub">締め切ると、参加者はチーム名を変えられなくなります。運営からはいつでも直せます。</p>';
+    return h;
+  }
+  INPUTS.teamName = function (el) {
+    var t = el.getAttribute('data-t');
+    S.tnDraft[t] = el.value;
+    var b = document.querySelector('[data-act="saveTeamName"][data-t="' + t + '"]');
+    var cur = (S.ov.state.teamNames || {})[t] || '';
+    if (b) b.disabled = el.value.trim() === cur;
+  };
+  ACTIONS.saveTeamName = function (el) {
+    var t = el.getAttribute('data-t');
+    var v = String(S.tnDraft[t] || '').replace(/\s+/g, ' ').trim();
+    api('adminSetTeamName', [t, v], {
+      save: true, btn: el,
+      onOk: function (st) { S.ov.state = st; delete S.tnDraft[t]; render(); }
+    });
+  };
+  ACTIONS.lockTeamName = function (el) {
+    var lock = el.getAttribute('data-v') === '1';
+    api('adminSetTeamNameLocked', [lock], {
+      save: true, btn: el,
+      onOk: function (st) { S.ov.state = st; render(); }
+    });
+  };
 
   function eventPicker(key, label, val) {
     var h = '<label class="f">' + label + '</label>';

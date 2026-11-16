@@ -135,6 +135,18 @@ listTeamMembers('A')
 data = { team: 'A', members: [ { id: 'P01', name: '斎藤 花子', kana: 'さいとう はなこ' }, ... ] } // ひらがな順
 ```
 
+### setTeamName(participantId, name)(2026-11-16 追加)
+自分のチームの名前を決める・変える。**チームのだれでもよい**(あとから入れた人の名前で上書き)。
+```js
+setTeamName('P01', 'つなぼるズ')
+data = { team: 'A', name: 'つなぼるズ', teamNames: { A: 'つなぼるズ', B: '', C: '', D: '' } }
+```
+- 前後の空白を取り、続く空白・改行は1つの空白にする。**10字まで**(絵文字も1字)。空にすると名前を消す
+- 運営が締め切ったあとはエラー `TEAM_NAME_LOCKED`(「チーム名はもう締め切られました」)
+- `getState` は `teamNames: { A, B, C, D }`(空 = まだない)と `teamNameLocked` を返す
+- 参加者の画面では、チーム名があれば「Aチーム」の代わりに出す(帯・チーム選択では名前の下に小さく「Aチーム(赤)」)。運営の画面は A〜D のまま
+- 名前は状態シートの「チーム名A」〜「チーム名D」、締め切りは「チーム名の締め切り」(○)。`resetEventData` で消える。「更新時刻」は変えない
+
 ### selectSelf(participantId)
 名前を選んだとき。初めてならその時刻を来場時刻として記録する(何度呼んでもよい)。QRを読み直したとき、覚えているIDで呼んで本人確認にも使える。
 ```js
@@ -381,6 +393,10 @@ data = {
   serverNow: ms
 }
 ```
+
+### adminSetTeamName(token, team, name) / adminSetTeamNameLocked(token, locked)(2026-11-16 追加)
+チーム名を直す・消す(締め切ったあとでもできる)/ 参加者からの受付を締め切る(true)・再開する(false)。
+どちらも戻り値は adminSetState と同じ状態(`teamNames`・`teamNameLocked`・`teamNameMax` を含む)。進行タブの「🏷️ チーム名」から使う。
 
 ### adminSetState(token, patch)
 状態の切り替え。渡した項目だけ変える。

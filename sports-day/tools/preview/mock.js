@@ -7,7 +7,7 @@
   var def = {
     mode: '待ち', currentEvent: 'バド+ドッジ', nextEvent: 'バレー', sportsHidden: false,
     predStatus: '受付中', match: 'C-D',
-    fail: false, latency: 400, quizStartedAt: 0, results: false
+    fail: false, latency: 400, quizStartedAt: 0, results: false, teamNameLocked: false
   };
   var cfg;
   try { cfg = Object.assign({}, def, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, def); }
@@ -16,7 +16,7 @@
   /* サーバーに保存されたことにするデータ:preds 予想 / predSeq 予想の番号 / quiz クイズの答え / survey アンケート */
   var db;
   try { db = JSON.parse(localStorage.getItem(DB_KEY) || '{}'); } catch (e) { db = {}; }
-  db = Object.assign({ preds: {}, predSeq: {}, quiz: {}, survey: {} }, db);
+  db = Object.assign({ preds: {}, predSeq: {}, quiz: {}, survey: {}, teamNames: { A: '', B: '', C: '', D: '' } }, db);
   function saveDb() { try { localStorage.setItem(DB_KEY, JSON.stringify(db)); } catch (e) { /* */ } }
 
   var OFFSET = 3000; /* サーバーの時計は端末より3秒進んでいることにする */
@@ -159,6 +159,7 @@
         mode: cfg.mode, currentEvent: cfg.currentEvent, nextEvent: cfg.nextEvent, updatedAt: Date.now(), serverNow: serverNow(),
         /* 点数を隠す:バレーの準決勝が2試合とも確定したあと。sports は返さない */
         sportsHidden: !!cfg.sportsHidden, sports: cfg.sportsHidden ? null : sports,
+        teamNames: Object.assign({}, db.teamNames), teamNameLocked: !!cfg.teamNameLocked,
         prediction: null, quiz: null, results: null
       };
       if (cfg.mode === '予想') d.prediction = matchView();
@@ -196,6 +197,15 @@
       var p = me(pid);
       if (!p) return err('NOT_FOUND', '参加者が見つかりません');
       return { ok: true, data: { id: p.id, name: p.name, kana: p.kana, team: p.team, introDone: !!intros[pid], surveyDone: !!db.survey[pid] } };
+    },
+    setTeamName: function (pid, name) {
+      var p = me(pid);
+      if (!p) return err('NOT_FOUND', '参加者が見つかりません');
+      if (cfg.teamNameLocked) return err('TEAM_NAME_LOCKED', 'チーム名はもう締め切られました');
+      var n = String(name || '').replace(/\s+/g, ' ').trim();
+      if (Array.from(n).length > 10) return err('INVALID', 'チーム名は10字までです');
+      db.teamNames[p.team] = n; saveDb();
+      return { ok: true, data: { team: p.team, name: n, teamNames: Object.assign({}, db.teamNames) } };
     },
     getIntro: function (pid) {
       return { ok: true, data: { intro: intros[pid] || null, options: {
@@ -302,7 +312,7 @@
   window.addEventListener('DOMContentLoaded', function () {
     var box = document.createElement('div');
     box.style.cssText = 'position:fixed;right:6px;bottom:6px;z-index:99;font:12px sans-serif;background:#222;color:#fff;border-radius:8px;padding:6px;opacity:.85;max-width:230px';
-    var BOOLS = { fail: true, sportsHidden: true };
+    var BOOLS = { fail: true, sportsHidden: true, teamNameLocked: true };
     function sel(key, label, opts) {
       return '<label style="display:block;margin:2px 0">' + label + ' <select data-k="' + key + '">' + opts.map(function (o) {
         var v = typeof o === 'string' ? o : o[0], t = typeof o === 'string' ? o : o[1];
@@ -314,6 +324,7 @@
       sel('sportsHidden', '点数', [['false', '見せる'], ['true', '隠す(準決勝のあと)']]) +
       sel('predStatus', '予想', ['受付前', '受付中', ['公開', '締め切り後(公開)'], ['確定', '試合確定後(的中率)']]) +
       sel('match', '予想の試合', ['C-D', 'A-B']) +
+      sel('teamNameLocked', 'チーム名', [['false', '受付中'], ['true', '締め切り']]) +
       sel('fail', '通信', [['false', 'つながる'], ['true', '失敗する']]) +
       '<button data-reset>クイズをやり直す</button> <button data-endnames>名前クイズを終わらせる</button> ' +
       '<button data-clear>端末とサーバーの記憶を消す</button></div>';

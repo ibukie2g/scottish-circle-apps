@@ -16,8 +16,41 @@ function readState_(fresh) {
     predictionMatchId: toStr_(kv['予想の試合ID']),
     quizStartedAt: toMs_(kv['クイズ開始時刻']),
     predictionOpenedAt: toMs_(kv['予想の受付開始時刻']),
-    updatedAt: toMs_(kv['更新時刻'])
+    updatedAt: toMs_(kv['更新時刻']),
+    teamNames: readTeamNames_(kv),
+    teamNameLocked: toBool_(kv[TEAM_NAME_LOCK_KEY])
   };
+}
+
+// チーム名は状態シートの「チーム名A」〜「チーム名D」に置く(resetEventData で一緒に消える)
+var TEAM_NAME_LOCK_KEY = 'チーム名の締め切り';
+function teamNameKey_(team) { return 'チーム名' + team; }
+
+/** { A: 'つなぼる', B: '', ... }(決まっていないチームは空文字) */
+function readTeamNames_(kv) {
+  var out = {};
+  TEAMS.forEach(function (t) { out[t] = normalizeTeamName(kv[teamNameKey_(t)]); });
+  return out;
+}
+
+/**
+ * チーム名を書く(参加者・運営の両方から使う)
+ * @param {string} team 'A'〜'D'
+ * @param {*} name 空なら名前を消す(「Aチーム」に戻る)
+ * @return {string} 書いた名前
+ */
+function writeTeamName_(team, name) {
+  var t = normTeam_(team);
+  if (!t) throw appError_('INVALID', 'チームは A〜D のどれかです');
+  var n = normalizeTeamName(name);
+  if (teamNameLength(n) > TEAM_NAME_MAX) throw appError_('INVALID', 'チーム名は' + TEAM_NAME_MAX + '字までです');
+  var values = {};
+  values[teamNameKey_(t)] = n;
+  withLock_(function () {
+    writeKeyValues_(SH_STATE, values); // 更新時刻は変えない(画面の切り替えの合図ではないので)
+  });
+  invalidate_([SH_STATE]);
+  return n;
 }
 
 function writeState_(values) {

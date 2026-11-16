@@ -186,6 +186,12 @@ img { max-width: 100%; }
 }
 .teamband .t { font-size: 24px; font-weight: 800; letter-spacing: .02em; }
 .teamband .n { font-size: 15px; font-weight: 700; opacity: .95; }
+/* チーム名があるとき:名前を大きく、その下に「Aチーム(赤)」を小さく */
+.teamband .t .tname, .team-btn .tname { display: block; line-height: 1.2; overflow-wrap: anywhere; }
+.teamband .t .tletter, .team-btn .tletter { display: block; font-size: 14px; font-weight: 700; opacity: .9; letter-spacing: 0; }
+.team-btn .tb { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+/* 長いチーム名は、はみ出さずに折り返す(順位表・結果発表の行。.pill の定義はこの下) */
+.rank-row .tm, .res .top .pill { min-width: 0; }
 .bg-A { background: var(--A); color: var(--A-ink); }
 .bg-B { background: var(--B); color: var(--B-ink); }
 .bg-C { background: var(--C); color: var(--C-ink); }
@@ -193,7 +199,8 @@ img { max-width: 100%; }
 .tint-A { background: var(--A-tint); } .tint-B { background: var(--B-tint); }
 .tint-C { background: var(--C-tint); } .tint-D { background: var(--D-tint); }
 .pill {
-  display: inline-block; border-radius: 999px; padding: 2px 12px; font-weight: 800; white-space: nowrap;
+  display: inline-block; border-radius: 999px; padding: 2px 12px; font-weight: 800;
+  white-space: normal; overflow-wrap: anywhere; line-height: 1.3;
 }
 
 /* ===== いま/つぎ ===== */
@@ -243,6 +250,7 @@ img { max-width: 100%; }
   box-shadow: 0 5px 0 rgba(0, 0, 0, .15), 0 8px 16px rgba(120, 90, 50, .15);
 }
 .team-btn:active { transform: translateY(2px); }
+.team-btn { line-height: 1.25; text-align: center; }
 .team-btn .arrow { font-size: 22px; opacity: .85; }
 .team-btn.chosen { box-shadow: 0 0 0 4px var(--card), 0 0 0 7px var(--ink), 0 5px 0 rgba(0, 0, 0, .15); }
 .team-btn.dim { opacity: .45; }
@@ -296,6 +304,8 @@ img { max-width: 100%; }
 .match .round { font-size: 26px; font-weight: 800; }
 .match .vs { font-size: 26px; font-weight: 800; margin-top: 4px; }
 .match .vs i { font-style: normal; font-size: 18px; color: var(--ink-soft); margin: 0 8px; }
+/* チーム名が長いときは、名前の途中ではなく名前ごとに改行する */
+.match .vs .mark { display: inline-block; overflow-wrap: anywhere; line-height: 1.3; }
 .progress { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .progress .lbl { font-weight: 800; font-size: 14px; line-height: 1.3; text-align: left; }
 .people { width: 48px; height: 30px; flex: none; }
@@ -429,7 +439,7 @@ img { max-width: 100%; }
 .crown-names { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-weight: 700; }
 .res .rk { font-size: 30px; font-weight: 800; flex: none; }
 .res .rk small { font-size: 16px; }
-.res .tot { margin-left: auto; font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.res .tot { margin-left: auto; font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; flex: none; white-space: nowrap; }
 .res .tot small { font-size: 15px; }
 .res .bd { display: flex; gap: 8px; margin-top: 6px; font-size: 14px; font-weight: 700; }
 .res .bd span { flex: 1; background: #f4eee3; border-radius: 10px; padding: 4px 8px; text-align: center; }

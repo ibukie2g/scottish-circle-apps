@@ -27,6 +27,8 @@ function stateData_() {
     currentEvent: st.currentEvent,
     nextEvent: st.nextEvent,
     updatedAt: st.updatedAt,
+    teamNames: st.teamNames,          // { A: 'つなぼる', B: '', ... }(空 = まだ決まっていない)
+    teamNameLocked: st.teamNameLocked, // true = 運営が締め切った(参加者は変えられない)
     sportsHidden: hidden,
     sports: hidden ? null : scores.teams.map(function (t) {
       return {
@@ -171,6 +173,23 @@ function meView_(id) {
     id: id, name: pp.name || id, kana: pp.kana || '', team: p.team, introDone: !!(intro && intro.comment),
     surveyDone: surveyDone_(id) // アンケートを送ったか(端末ではなく参加者ごとに持つ)
   };
+}
+
+// ============ チーム名 ============
+
+/**
+ * 自分のチームの名前を決める・変える(チームのだれでもよい。運営が締め切ったらエラー)
+ * @param {string} participantId
+ * @param {string} name 10字まで。空なら名前を消す
+ */
+function setTeamName(participantId, name) {
+  return api_(function () {
+    var p = requireParticipant_(participantId, true);
+    if (!p.team) throw appError_('INVALID', 'チームが決まっていません');
+    if (readState_(true).teamNameLocked) throw appError_('TEAM_NAME_LOCKED', 'チーム名はもう締め切られました');
+    var n = writeTeamName_(p.team, name);
+    return { team: p.team, name: n, teamNames: readState_(true).teamNames };
+  });
 }
 
 // ============ 自己紹介 ============

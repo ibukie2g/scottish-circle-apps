@@ -82,8 +82,30 @@ function stateForAdmin_(st, settings) {
     predictionMatchId: st.predictionMatchId, predictionOpenedAt: st.predictionOpenedAt,
     quizStartedAt: st.quizStartedAt, updatedAt: st.updatedAt,
     quiz: st.quizStartedAt ? quizTiming_(st, settings) : null,
-    modes: MODES
+    modes: MODES,
+    teamNames: st.teamNames, teamNameLocked: st.teamNameLocked, teamNameMax: TEAM_NAME_MAX
   };
+}
+
+// ============ チーム名 ============
+
+/** チーム名を直す・消す(締め切ったあとでもできる) */
+function adminSetTeamName(token, team, name) {
+  return adminApi_(token, function () {
+    writeTeamName_(team, name);
+    return stateForAdmin_(readState_(true), readSettings_(true));
+  });
+}
+
+/** チーム名の受付を締め切る(locked=true)・再開する(false) */
+function adminSetTeamNameLocked(token, locked) {
+  return adminApi_(token, function () {
+    var values = {};
+    values[TEAM_NAME_LOCK_KEY] = locked ? '○' : '';
+    withLock_(function () { writeKeyValues_(SH_STATE, values); });
+    invalidate_([SH_STATE]);
+    return stateForAdmin_(readState_(true), readSettings_(true));
+  });
 }
 
 // ============ 状態 ============

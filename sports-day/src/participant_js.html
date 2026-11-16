@@ -52,7 +52,20 @@
     var x = Number(n);
     return Math.round(x) === x ? String(x) : x.toFixed(1);
   }
-  function teamLabel(t) { return t ? t + 'チーム' : ''; }
+  /* チーム名(開会で決めて、チームのだれでも入れられる)。まだなければ '' */
+  function teamName(t) {
+    var n = S.state && S.state.teamNames && S.state.teamNames[t];
+    return n ? String(n) : '';
+  }
+  /* 参加者の画面でのチームの呼び方:チーム名があればチーム名、なければ「Aチーム」 */
+  function teamLabel(t) { return t ? (teamName(t) || t + 'チーム') : ''; }
+  /* 入口のチーム表と同じ書き方(チーム名の下に小さく添える) */
+  function teamLetter(t) { return t + 'チーム(' + (TEAM_COLOR[t] || '') + ')'; }
+  /* 帯やボタンの中身:チーム名があれば大きく、その下に「Aチーム(赤)」を小さく */
+  function teamTitle(t) {
+    var n = teamName(t);
+    return n ? '<span class="tname">' + esc(n) + '</span><small class="tletter">' + esc(teamLetter(t)) + '</small>' : esc(teamLetter(t));
+  }
   function teamPill(t, extra) {
     return '<span class="pill bg-' + esc(t) + (extra ? ' ' + extra : '') + '">' + esc(teamLabel(t)) + '</span>';
   }
@@ -221,7 +234,7 @@
     return 'wait';
   }
   function isFormView(v) {
-    return v === 'intro' || v === 'survey' || (v === 'quiz' && S.quiz && S.quiz.phase === 'names');
+    return v === 'intro' || v === 'survey' || v === 'teamName' || (v === 'quiz' && S.quiz && S.quiz.phase === 'names');
   }
 
   var VIEWS = {};
@@ -338,7 +351,7 @@
     h += '<div class="center"><h1 class="h1">合同運動会</h1><span class="squiggle"></span></div>';
     TEAMS.forEach(function (t) {
       h += '<button type="button" class="team-btn bg-' + t + '" data-act="pickTeam" data-team="' + t + '">' +
-        t + 'チーム(' + TEAM_COLOR[t] + ')<span class="arrow">›</span></button>';
+        '<span class="tb">' + teamTitle(t) + '</span><span class="arrow">›</span></button>';
     });
     if (S.pid) h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
     return h;
@@ -346,7 +359,7 @@
 
   VIEWS.names = function () {
     var t = S.pickTeam, mm = S.members;
-    var h = '<div class="teamband bg-' + t + '"><div class="t">' + t + 'チーム(' + TEAM_COLOR[t] + ')</div>' +
+    var h = '<div class="teamband bg-' + t + '"><div class="t">' + teamTitle(t) + '</div>' +
       '<div class="n">自分の名前をタップしてね</div></div>';
     if (!mm || mm.team !== t || mm.loading) return h + spinner('名前を読み込み中…');
     if (mm.err) {
@@ -463,7 +476,7 @@
   // ============ 待ち画面 ============
   function myHeader() {
     var me = S.me || {};
-    return '<div class="teamband bg-' + esc(me.team) + '"><div class="t">' + esc(me.team) + 'チーム(' + esc(TEAM_COLOR[me.team] || '') + ')</div>' +
+    return '<div class="teamband bg-' + esc(me.team) + '"><div class="t">' + (me.team ? teamTitle(me.team) : '') + '</div>' +
       '<div class="n">' + esc(me.name) + ' さん</div></div>';
   }
   function rankTable(rows, title) {
@@ -473,7 +486,7 @@
       var c = r.sportsRank === 1 ? '<span class="crown"></span>' : '';
       h += '<div class="rank-row' + (S.me && r.team === S.me.team ? ' me' : '') + '">' +
         '<div class="r">' + c + '<b>' + esc(r.sportsRank) + '</b>位</div>' +
-        '<div class="tm"><span class="pill bg-' + r.team + '">' + r.team + 'チーム(' + TEAM_COLOR[r.team] + ')</span></div>' +
+        '<div class="tm">' + teamPill(r.team) + '</div>' +
         '<div class="pt">' + fmt(r.sportsTotal) + '<small>点</small></div></div>';
     });
     return h + '</div>';
@@ -491,6 +504,12 @@
     var h = myHeader() + hero('tsunaboru_normal', say);
     h += '<div class="event now"><span class="lbl">いま:</span><span class="name">' + esc(cur || '−') + '</span><span class="icons">' + eventIcons(cur) + '</span></div>';
     h += '<div class="event next"><span class="lbl">つぎ:</span><span class="name">' + esc(next || '−') + '</span><span class="icons">' + eventIcons(next) + '</span></div>';
+    var canName = !!(myTeam && !st.teamNameLocked);
+    if (canName && !teamName(myTeam)) {
+      h += '<div class="card center tint-' + esc(myTeam) + '"><p class="h3" style="margin:0">チーム名を決めよう!</p>' +
+        '<p class="muted" style="margin:2px 0 0">チームのだれが入れてもOK。みんなの画面に出るよ</p>' +
+        '<button type="button" class="btn" data-act="openTeamName">チーム名を入れる</button></div>';
+    }
     if (S.me && !S.me.introDone) {
       h += '<div class="card center tint-C"><p class="h3" style="margin:0">自己紹介がまだだよ!</p>' +
         '<p class="muted" style="margin:2px 0 0">最後のクイズのヒントになるので、書いておいてね</p>' +
@@ -506,8 +525,60 @@
     /* ひとこと:待ち・休憩のもの。クイズが今か次の種目なら、クイズの前のものも */
     h += tipHtml((cur + next).indexOf('クイズ') >= 0 ? ['いつでも', '待ち', 'クイズの前'] : ['いつでも', '待ち']);
     if (S.me && S.me.introDone) h += '<button type="button" class="btn sub" data-act="openIntro">自己紹介を見る・直す</button>';
+    if (canName && teamName(myTeam)) h += '<button type="button" class="btn ghost" data-act="openTeamName">チーム名を変える</button>';
     return h;
   };
+
+  // ============ チーム名 ============
+  var TEAM_NAME_MAX = 10;
+  function openTeamName() {
+    var t = S.me && S.me.team;
+    if (!t) return;
+    S.tname = { value: teamName(t), err: '', saving: false };
+    S.sub = 'teamName';
+    render(true);
+  }
+  VIEWS.teamName = function () {
+    var t = S.me && S.me.team, tn = S.tname || { value: '' };
+    var h = '<div class="teamband bg-' + esc(t) + '"><div class="t">' + (t ? teamTitle(t) : '') + '</div></div>';
+    h += hero('mixle_think', 'チーム名を<br>入れてね!');
+    if (S.state && S.state.teamNameLocked) {
+      return h + '<div class="card center"><p class="msg">チーム名はもう締め切られました</p>' +
+        '<button type="button" class="btn sub" data-act="closeSub">もどる</button></div>';
+    }
+    var n = charLen(tn.value.trim());
+    h += '<div class="card"><div class="field" style="margin-top:4px"><label class="lbl" for="teamNameIn">チーム名 <small>(' + TEAM_NAME_MAX + '字まで)</small></label>' +
+      '<input id="teamNameIn" class="input" type="text" data-in="teamName" value="' + esc(tn.value) + '" placeholder="例)つなぼるズ" autocomplete="off">' +
+      '<div class="help"><span>チームのだれが変えても、全員の画面に出るよ</span>' +
+      '<span id="tnCount" class="' + (n > TEAM_NAME_MAX ? 'over' : '') + '">' + n + '/' + TEAM_NAME_MAX + '</span></div></div>';
+    h += '<div class="err">' + esc(tn.err || '') + '</div>';
+    h += '<button type="button" class="btn" data-act="saveTeamName"' + (tn.saving ? ' disabled' : '') + '>' + (tn.saving ? '保存中…' : '決定!') + '</button>';
+    h += '</div>';
+    h += '<button type="button" class="btn ghost" data-act="closeSub">もどる</button>';
+    return h;
+  };
+  function saveTeamName() {
+    var tn = S.tname;
+    if (!tn || tn.saving) return;
+    var v = tn.value.replace(/\s+/g, ' ').trim();
+    if (!v) { tn.err = 'チーム名を入れてね'; render(true); return; }
+    if (charLen(v) > TEAM_NAME_MAX) { tn.err = 'チーム名は' + TEAM_NAME_MAX + '字までです'; render(true); return; }
+    tn.saving = true; tn.err = '';
+    render(true);
+    call('setTeamName', [S.pid, v], function (d) {
+      tn.saving = false;
+      if (S.state) S.state.teamNames = d.teamNames;
+      if (S.sub === 'teamName') S.sub = null;
+      toast('チーム名を「' + d.name + '」にしたよ!');
+      render(true);
+    }, function (e) {
+      if (handleCommonErr(e)) return;
+      tn.saving = false;
+      tn.err = e.message;
+      if (e.code === 'TEAM_NAME_LOCKED' && S.state) S.state.teamNameLocked = true;
+      render(true);
+    });
+  }
 
   // ============ 勝敗予想 ============
   function fetchPrediction() {
@@ -1254,9 +1325,17 @@
       render(true);
     },
     surveySns: function () { S.survey.snsOk = !S.survey.snsOk; render(true); },
-    sendSurvey: sendSurvey
+    sendSurvey: sendSurvey,
+    openTeamName: openTeamName,
+    saveTeamName: saveTeamName
   };
   var INPUTS = {
+    teamName: function (el) {
+      if (!S.tname) return;
+      S.tname.value = el.value;
+      var c = $('tnCount'), n = charLen(el.value.trim());
+      if (c) { c.textContent = n + '/' + TEAM_NAME_MAX; c.className = n > TEAM_NAME_MAX ? 'over' : ''; }
+    },
     sportOther: function (el) { S.intro.sportOther = el.value; },
     comment: function (el) {
       S.intro.comment = el.value;
