@@ -22,6 +22,7 @@ function page(team) {
   let html = include('participant');
   html = html.replace(/<\?!=\s*include\('([\w]+)'\)\s*\?>/g, (_, n) => include(n));
   html = html.replace(/<\?!=\s*team\s*\?>/g, team);
+  html = html.replace(/<\?!=\s*rosterKey\s*\?>/g, 'preview');
   // ひとこと(本番はひとことシートから。ここでは見本を埋める)
   const tips = [
     { text: '話しかけるときは名前を呼ぶと覚えてもらいやすいよ', mode: 'いつでも' },

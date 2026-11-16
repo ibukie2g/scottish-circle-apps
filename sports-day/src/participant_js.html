@@ -10,7 +10,8 @@
   'use strict';
 
   // ============ 小道具 ============
-  var KEY = 'sd26.';
+  // 名簿ごとに保存先を分ける。テスト名簿のP05を覚えた端末が、本物の名簿のP05になって来場を記録しないように
+  var KEY = 'sd26.' + (typeof ROSTER_KEY === 'string' && /^[0-9a-z]+$/.test(ROSTER_KEY) ? ROSTER_KEY + '.' : '');
   var memStore = {};
   var store = {
     get: function (k) {

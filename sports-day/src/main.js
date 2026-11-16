@@ -19,9 +19,22 @@ function doGet(e) {
   // 「ひとこと」は、アプリを開いたときにページに埋め込む(読み込み中にも出せる。通信は増えない)
   t.tips = '[]';
   if (!isAdmin) { try { t.tips = tipsJson_(); } catch (err) { t.tips = '[]'; } }
+  // 名簿の目印。参加者画面はこれを端末に保存するキーに混ぜる。名簿を切り替えると、テスト名簿で覚えたIDは使われなくなる
+  if (!isAdmin) t.rosterKey = rosterKey_();
   return t.evaluate()
     .setTitle(isAdmin ? '運動会 運営' : '合同運動会')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
+}
+
+/**
+ * 名簿(ROSTER_SPREADSHEET_ID)から作る短い目印。英数字だけ。名簿のIDそのものはページに出さない
+ * テスト名簿と本物の名簿では参加者ID(P01…)が重なるので、端末が覚えたIDを名簿ごとに分けるために使う
+ */
+function rosterKey_() {
+  var id = PropertiesService.getScriptProperties().getProperty('ROSTER_SPREADSHEET_ID') || '';
+  var h = 5381;
+  for (var i = 0; i < id.length; i++) h = ((h * 33) ^ id.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }
 
 /** HTMLから別のHTMLファイルを読み込む(<?!= include('ファイル名') ?>) */
