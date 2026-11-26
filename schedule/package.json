@@ -1,0 +1,8 @@
+{
+  "name": "schedule",
+  "private": true,
+  "description": "出欠・日程調整アプリ(GAS)。純粋関数とサーバーの流れを Node.js でテストする",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

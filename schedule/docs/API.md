@@ -101,6 +101,8 @@ data = { savedAt }
 
 ## 2. 運営(すべて `token` は adminLogin でもらう運営用トークン)
 
+※実装(11/27)では、イベントを扱う関数はすべて `groupId` も受け取る(例:`adminGetResults(token, groupId, eventId, filter)`)。グループのファイルを開くため。ほかに `adminGetGroup(token, groupId)`(メンバーとイベント)・`adminUndecide`(決めた日の取り消し)・`adminSetAttendance`・`adminSyncRoster`(サークル:名簿の新しい人を足す)・`adminUpdateGroup`(名前・キャラクター)がある。正確な引数は `src/api_admin.js` を見る
+
 | 関数 | すること | 返すもの |
 |---|---|---|
 | `adminLogin(password)` | ログイン | `{ token }`(6時間有効) |
