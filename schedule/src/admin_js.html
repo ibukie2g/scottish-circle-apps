@@ -44,13 +44,21 @@
   var app = document.getElementById('app');
 
   // ===== 読み込み =====
-  function loadHome() {
-    S.view = 'loading'; render();
+  function loadHome(keep) {
+    if (!keep) { S.view = 'loading'; render(); }
     call('adminListGroups').then(function (d) { S.groups = d.groups; S.view = 'home'; render(); }).catch(fail);
   }
-  function loadGroup(id) {
-    S.view = 'loading'; render();
+  function loadGroup(id, keep) {
+    if (!keep) { S.view = 'loading'; render(); }
     call('adminGetGroup', [id]).then(function (d) { S.group = d; S.view = 'group'; render(); }).catch(fail);
+  }
+  /** いまの画面を読み直す(「最新にする」ボタンと、ほかのタブから戻ってきたとき) */
+  function refresh(quiet) {
+    if (S.view === 'event' && S.res) loadEvent(S.group.group.id, S.res.event.id, true);
+    else if (S.view === 'group' && S.group) loadGroup(S.group.group.id, true);
+    else if (S.view === 'home') loadHome(true);
+    else return;
+    if (!quiet) toast('最新にしました');
   }
   function loadEvent(gid, eid, keep) {
     if (!keep) { S.view = 'loading'; render(); }
@@ -192,7 +200,8 @@
       '<h1>' + esc(ev.name) + ' ' + badge(ev.status) + '</h1><div class="sub">' + (ev.deadline ? '締め切り ' + fmtDate(ev.deadline) + ' ・ ' : '') +
       '結果の見せ方:' + esc(ev.visibility === '伊吹だけ' ? '見せない' : ev.visibility === '人数' ? '人数だけ' : '名前も見せる') + '</div></div>' +
       '<button class="btn ghost" data-act="showLink" data-link="' + esc(ev.link) + '" data-title="' + esc(ev.name) + 'のリンク">リンク・QR</button>' +
-      '<button class="btn ghost" data-act="editEvent">変更</button></div>';
+      '<button class="btn ghost" data-act="refresh">最新にする</button>' +
+      '<button class="btn ghost" data-act="editEvent">変更</button><button class="btn danger" data-act="deleteEvent">削除</button></div>';
     h += '<div class="cols"><div>';
     // 出欠
     if (r.attendance) {
@@ -220,7 +229,8 @@
       h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">いちばん多い日</div>' : '') +
         '<div class="row"><div class="grow date">' + fmtDate(b.date) + (b.time ? ' <span class="sub">' + esc(b.time) + '</span>' : '') + (b.memo ? ' <span class="sub">' + esc(b.memo) + '</span>' : '') + '</div>' +
         '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span>' +
-        (ev.status === '日程調整中' ? '<button class="btn green sm" data-act="decide" data-c="' + esc(b.candidateId) + '">この日に決める</button><button class="btn ghost sm" data-act="removeCand" data-c="' + esc(b.candidateId) + '" title="候補日を消す">✕</button>' : '') + '</div>' +
+        (S.candEdit ? '<label class="btn ghost sm"><input type="checkbox" data-in="candChk" value="' + esc(b.candidateId) + '"' + (S.candEdit[b.candidateId] ? ' checked' : '') + '> 消す</label>'
+          : ev.status === '日程調整中' ? '<button class="btn green sm" data-act="decide" data-c="' + esc(b.candidateId) + '">この日に決める</button>' : '') + '</div>' +
         '<div class="bar"><i style="width:' + (b.o / total * 100) + '%;background:var(--o)"></i><i style="width:' + (b.t / total * 100) + '%;background:var(--t)"></i><i style="width:' + (b.x / total * 100) + '%;background:var(--x)"></i></div>' +
         '<div class="names">' + [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
           var list = b.names[m[1]]; return list.length ? '<div><span class="lab ' + m[1] + '">' + m[0] + '</span>' + list.map(esc).join('・') + '</div>' : ''; }).join('') + '</div>' +
@@ -229,12 +239,17 @@
           (b.wanted.ng.length ? '<span style="color:var(--danger)">× ' + b.wanted.ng.map(esc).join('・') + '</span> ' : '') +
           (b.wanted.none.length ? '<span class="sub">未回答 ' + b.wanted.none.map(esc).join('・') + '</span>' : '') + '</div>' : '') + '</div>';
     });
-    if (ev.status === '日程調整中') h += '<button class="btn ghost sm" data-act="addCand">候補日を足す</button>';
+    if (S.candEdit) {
+      var nSel = Object.keys(S.candEdit).filter(function (k) { return S.candEdit[k]; }).length;
+      h += '<div class="row"><button class="btn danger sm" data-act="removeSelected"' + (nSel ? '' : ' disabled') + '>選んだ' + nSel + 'つを消す</button><button class="btn ghost sm" data-act="candEditOff">やめる</button></div>';
+    } else if (ev.status === '日程調整中') {
+      h += '<div class="row"><button class="btn ghost sm" data-act="addCand">候補日を足す</button><button class="btn ghost sm" data-act="candEditOn">候補日を消す</button></div>';
+    }
     if (r.attendance) h += '</details>';
     h += '</div><div>';
     // 右側:LINEに流す文・ひとこと・来てほしい人・代わりに入れる(名指しの催促はしない。11/27 伊吹)
     h += '<div class="card"><b>LINEに流す文</b><div class="sub" style="margin:2px 0 6px">直してからコピーしてもOK</div>' +
-      '<textarea class="remind" data-in="remind">' + esc(r.shareText) + '</textarea>' +
+      '<textarea class="remind" data-in="remind">' + esc(S.remind != null ? S.remind : r.shareText) + '</textarea>' +
       '<button class="btn sm" style="margin-top:6px" data-act="copyRemind">コピー</button></div>';
     if (r.comments.length) h += '<h2>ひとこと</h2><div class="card">' + r.comments.map(function (c) { return '<div><b>' + esc(c.name) + '</b>:' + esc(c.comment) + '</div>'; }).join('') + '</div>';
     h += '<h2>そのほか</h2><div class="card"><div class="row" style="margin-bottom:8px"><span class="grow">来てほしい人(' + r.wanted.length + '人)</span><button class="btn ghost sm" data-act="editWanted">選ぶ</button></div>' +
@@ -310,7 +325,26 @@
     },
     openGroup: function (el) { loadGroup(el.getAttribute('data-id')); },
     backGroup: function () { loadGroup(S.group.group.id); },
-    openEvent: function (el) { S.filter = {}; loadEvent(el.getAttribute('data-g'), el.getAttribute('data-id')); },
+    openEvent: function (el) { S.filter = {}; S.remind = null; S.candEdit = null; loadEvent(el.getAttribute('data-g'), el.getAttribute('data-id')); },
+    refresh: function () { refresh(false); },
+    candEditOn: function () { S.candEdit = {}; render(); },
+    candEditOff: function () { S.candEdit = null; render(); },
+    removeSelected: function () {
+      var ids = Object.keys(S.candEdit).filter(function (k) { return S.candEdit[k]; });
+      if (!ids.length || !confirm('選んだ' + ids.length + 'つの候補日を消しますか?(その日への答えも集計に出なくなります)')) return;
+      call('adminRemoveCandidates', [S.group.group.id, S.res.event.id, ids]).then(function () {
+        S.candEdit = null; toast('消しました'); loadEvent(S.group.group.id, S.res.event.id, true);
+      }).catch(fail);
+    },
+    deleteEvent: function () {
+      var ev = S.res.event;
+      if (!confirm('「' + ev.name + '」を削除しますか?\n候補日・みんなの答え・出欠もすべて消えて、元に戻せません。')) return;
+      var gid = S.group.group.id, once = S.group.group.kind === '1回きり';
+      call('adminDeleteEvent', [gid, ev.id]).then(function () {
+        toast('削除しました'); S.res = null;
+        if (once) loadHome(); else loadGroup(gid);
+      }).catch(fail);
+    },
     newEvent: function () { S.form = newForm(); S.err = ''; S.view = 'newEvent'; render(); },
     calPrev: function () { var f = S.form; f.calM--; if (f.calM < 0) { f.calM = 11; f.calY--; } render(); },
     calNext: function () { var f = S.form; f.calM++; if (f.calM > 11) { f.calM = 0; f.calY++; } render(); },
@@ -423,6 +457,7 @@
     fGrade: function (v) { S.filter.grade = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     fGender: function (v) { S.filter.gender = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     wantedChk: function (v, el) { S.modal.sel[el.value] = el.checked; },
+    candChk: function (v, el) { S.candEdit[el.value] = el.checked; render(); },
     attSel: function (v, el) {
       if (!v) return;
       call('adminSetAttendance', [S.group.group.id, S.res.event.id, el.getAttribute('data-m'), { status: v }]).then(function () { toast('保存しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
@@ -430,7 +465,7 @@
     'c.time': function (v, el) { S.form.cands[+el.getAttribute('data-i')].time = v; }
   };
   ['name', 'description', 'place', 'cost', 'url', 'deadline', 'visibility', 'defTime', 'wd', 'weeks'].forEach(function (k) { INPUTS['f.' + k] = function (v) { S.form[k] = v; }; });
-  var CHANGE_ONLY = { fGrade: 1, fGender: 1, attSel: 1, wantedChk: 1 };
+  var CHANGE_ONLY = { fGrade: 1, fGender: 1, attSel: 1, wantedChk: 1, candChk: 1 };
 
   app.addEventListener('click', function (e) {
     var el = e.target.closest('[data-act]');
@@ -448,6 +483,11 @@
     if (k && INPUTS[k] && (CHANGE_ONLY[k] || e.target.tagName === 'SELECT')) INPUTS[k](e.target.value, e.target);
   });
   app.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.getAttribute('data-in') === 'pw') ACTIONS.login(); });
+
+  // ほかのタブやアプリから戻ってきたら、自動で読み直す(入力中・選択中は読み直さない)
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && S.token && !S.modal && !S.busy && !S.candEdit) refresh(true);
+  });
 
   if (S.token) loadHome(); else { S.view = 'login'; render(); }
 })();

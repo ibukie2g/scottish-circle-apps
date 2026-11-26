@@ -163,3 +163,33 @@ test('候補日を足す・消す、来てほしい人、決めた日の取り�
   assert.deepEqual(e.candidates.map(c => c.id), ['C02']);
   assert.equal(e.status, '日程調整中');
 });
+
+test('候補日をまとめて消す・イベントを削除する(11/27 追加)', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '研究室', kind: 'グループ' }));
+  const tk = made.link.split('g=')[1];
+  const ev = ok(g.adminCreateEvent(token, made.groupId, { name: '打ち上げ', candidates: [
+    { date: '2026-12-10', time: '18:00' }, { date: '2026-12-10', time: '20:00' }, { date: '2026-12-11', time: '18:00' }] }));
+  const a = ok(g.joinGroup(tk, { name: '先生' }));
+  ok(g.submitAnswers(tk, ev.eventId, a.memberId, { C01: '○', C02: '○', C03: '×' }));
+  // 全部は消せない
+  assert.equal(g.adminRemoveCandidates(token, made.groupId, ev.eventId, ['C01', 'C02', 'C03']).error.code, 'INVALID');
+  const e = ok(g.adminRemoveCandidates(token, made.groupId, ev.eventId, ['C01', 'C03']));
+  assert.deepEqual(e.candidates.map(c => c.id), ['C02']);
+  // 消した候補日は集計に出ない
+  const r = ok(g.adminGetResults(token, made.groupId, ev.eventId, {}));
+  assert.deepEqual(r.byDate.map(d => d.candidateId), ['C02']);
+  // 決まった日は消せない
+  ok(g.adminAddCandidates(token, made.groupId, ev.eventId, [{ date: '2026-12-12', time: '' }]));
+  ok(g.adminDecide(token, made.groupId, ev.eventId, 'C02'));
+  assert.equal(g.adminRemoveCandidates(token, made.groupId, ev.eventId, ['C02']).error.code, 'INVALID');
+  // イベントを削除すると、参加者からも見えなくなる
+  ok(g.adminDeleteEvent(token, made.groupId, ev.eventId));
+  assert.equal(g.getEvent(tk, ev.eventId, a.memberId).error.code, 'NOT_FOUND');
+  assert.equal(ok(g.openGroup(tk, a.memberId)).events.length, 0);
+  assert.equal(ok(g.adminListGroups(token)).groups.find(x => x.id === made.groupId).events.length, 0);
+  // 1回きりは、イベントを消すとグループも一覧から消える
+  const once = ok(g.adminCreateEvent(token, '', { name: 'カラオケ', candidates: [{ date: '2026-12-20' }] }));
+  ok(g.adminDeleteEvent(token, once.groupId, once.eventId));
+  assert.ok(!ok(g.adminListGroups(token)).groups.some(x => x.id === once.groupId));
+});

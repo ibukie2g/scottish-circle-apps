@@ -228,15 +228,45 @@ function adminAddCandidates(token, groupId, eventId, candidates) {
 
 /** 候補日を消す(その候補日への答えは、次に保存されたときに消える。集計には出なくなる) */
 function adminRemoveCandidate(token, groupId, eventId, candidateId) {
+  return adminRemoveCandidates(token, groupId, eventId, [candidateId]);
+}
+
+/** 候補日をまとめて消す(11/27 追加)。決まった日は消せない */
+function adminRemoveCandidates(token, groupId, eventId, candidateIds) {
+  return api_(function () {
+    requireAdmin_(token);
+    var g = groupById_(groupId);
+    var ids = (candidateIds || []).map(toStr_).filter(Boolean);
+    if (!ids.length) throw appError_('INVALID', '消す候補日を選んでください');
+    return withLock_(function () {
+      var ev = eventById_(g, eventId, true);
+      if (ev.decidedId && ids.indexOf(ev.decidedId) >= 0) throw appError_('INVALID', '決まった日は消せません。先に「日程調整に戻す」をしてください');
+      var cands = readCandidates_(g, eventId, true);
+      if (cands.filter(function (c) { return ids.indexOf(c.id) < 0; }).length === 0) throw appError_('INVALID', '候補日を全部は消せません。1つ以上残すか、イベントごと削除してください');
+      deleteRows_(g.fileId, G_CANDS, cands.filter(function (c) { return ids.indexOf(c.id) >= 0; }).map(function (c) { return c._row; }));
+      return eventForAdmin_(g, eventById_(g, eventId, true));
+    });
+  });
+}
+
+/**
+ * イベントを削除する(間違えて作ったとき用。11/27 追加)。候補日・回答・出欠・来てほしい人・控えもすべて消す。元に戻せない
+ * 1回きりのグループなら、グループも一覧からしまう(ファイルは残る)
+ */
+function adminDeleteEvent(token, groupId, eventId) {
   return api_(function () {
     requireAdmin_(token);
     var g = groupById_(groupId);
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
-      if (ev.decidedId === candidateId) throw appError_('INVALID', '決まった日は消せません。先に「決めた日を取り消す」をしてください');
-      var rows = readCandidates_(g, eventId, true).filter(function (c) { return c.id === candidateId; }).map(function (c) { return c._row; });
-      deleteRows_(g.fileId, G_CANDS, rows);
-      return eventForAdmin_(g, eventById_(g, eventId, true));
+      [[G_CANDS, readCandidates_], [G_ANSWERS, readAnswers_], [G_ATTEND, readAttendance_], [G_WANTED, readWanted_]].forEach(function (pair) {
+        deleteRows_(g.fileId, pair[0], pair[1](g, ev.id, true).map(function (r) { return r._row; }));
+      });
+      deleteRows_(g.fileId, G_EVENTS, [ev._row]);
+      var idx = readTable_(indexId_(), IDX_EVENTS, true).rows.filter(function (r) { return toStr_(r['イベントID']) === ev.id; }).map(function (r) { return r._row; });
+      deleteRows_(indexId_(), IDX_EVENTS, idx);
+      if (g.kind === KIND_ONCE && !readEvents_(g, true).length) updateRow_(indexId_(), IDX_GROUPS, g._row, { '状態': 'しまう' });
+      return { deleted: ev.id, groupArchived: g.kind === KIND_ONCE };
     });
   });
 }
