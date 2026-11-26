@@ -1,0 +1,411 @@
+<script>
+(function () {
+  'use strict';
+  // ===== 小さな道具 =====
+  var WD = ['日', '月', '火', '水', '木', '金', '土'];
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmtDate(ymd) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '');
+    if (!m) return esc(ymd);
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return (+m[2]) + '/' + (+m[3]) + '(' + WD[d.getUTCDay()] + ')';
+  }
+  function lsGet(k, def) { try { var v = localStorage.getItem(k); return v === null ? def : JSON.parse(v); } catch (e) { return def; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 保存できない端末でも使える */ } }
+  function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { /* */ } }
+  function call(fn, args) {
+    return new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (res) { if (res && res.ok) resolve(res.data); else reject(res && res.error ? res.error : { code: 'INTERNAL', message: 'エラーが起きました' }); })
+        .withFailureHandler(function () { reject({ code: 'NETWORK', message: '通信できませんでした。電波のよいところでもう一度押してください' }); })[fn].apply(null, args || []);
+    });
+  }
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 2200);
+  }
+  function linkFor(token, eventId) { return APP_URL + '?g=' + token + (eventId ? '&e=' + encodeURIComponent(eventId) : ''); }
+
+  // ===== 状態 =====
+  var S = {
+    view: 'loading', error: '', group: null, me: null, events: [], members: null, search: '',
+    eventId: '', ev: null, draft: {}, comment: '', att: { status: '', arriveAt: '', comment: '' }, sending: false, joinErr: ''
+  };
+  var app = document.getElementById('app');
+
+  function meKey() { return 'sch.me.' + (S.group ? S.group.id : ''); }
+  function rememberGroup() {
+    var list = lsGet('sch.groups', []).filter(function (g) { return g.token !== TOKEN; });
+    list.unshift({ token: TOKEN, groupId: S.group.id, name: S.group.name });
+    lsSet('sch.groups', list.slice(0, 20));
+  }
+
+  // ===== 読み込み =====
+  function start() {
+    if (!TOKEN) { S.view = 'home'; render(); return; }
+    loadGroup(true);
+  }
+
+  function loadGroup(first) {
+    var known = lsGet('sch.knownGroupIds', {})[TOKEN] || '';
+    var memberId = known ? lsGet('sch.me.' + known, '') : '';
+    call('openGroup', [TOKEN, memberId]).then(function (d) {
+      S.group = d.group; S.events = d.events; S.me = d.me;
+      var map = lsGet('sch.knownGroupIds', {}); map[TOKEN] = d.group.id; lsSet('sch.knownGroupIds', map);
+      rememberGroup();
+      if (!S.me) {
+        if (memberId) lsDel(meKey());
+        S.view = 'pick'; render(); loadMembers(); return;
+      }
+      lsSet('sch.name', S.me.name);
+      if (first) {
+        var only = S.events.filter(function (e) { return !e.archived; });
+        if (EVENT_PARAM) return openEvent(EVENT_PARAM);
+        if (S.group.kind === '1回きり' && S.events.length) return openEvent(S.events[0].id);
+        if (only.length === 1 && S.events.length === 1) return openEvent(only[0].id);
+      }
+      S.view = 'group'; render();
+    }).catch(showError);
+  }
+
+  function loadMembers() {
+    call('listMembers', [TOKEN]).then(function (d) { S.members = d.members; render(); }).catch(showError);
+  }
+
+  function openEvent(id) {
+    S.eventId = id; S.view = 'event'; S.ev = null; render();
+    call('getEvent', [TOKEN, id, S.me ? S.me.memberId : '']).then(function (d) {
+      S.ev = d;
+      S.draft = Object.assign({}, d.mine.answers || {});
+      S.comment = d.mine.comment || '';
+      var a = d.mine.attendance || {};
+      S.att = { status: a.status || '', arriveAt: a.arriveAt || '', comment: a.comment || '' };
+      render();
+    }).catch(showError);
+  }
+
+  function showError(err) {
+    if (err && err.code === 'NOT_FOUND' && S.view === 'loading') { S.view = 'error'; S.error = err.message; render(); return; }
+    if (err && err.code === 'NOT_FOUND' && S.group && /名前/.test(err.message)) {
+      lsDel(meKey()); S.me = null; S.view = 'pick'; render(); loadMembers(); toast(err.message); return;
+    }
+    S.sending = false;
+    if (S.view === 'loading' || (S.view === 'event' && !S.ev)) { S.view = 'error'; S.error = (err && err.message) || 'エラーが起きました'; render(); return; }
+    toast((err && err.message) || 'エラーが起きました');
+    render();
+  }
+
+  // ===== 画面 =====
+  function render() {
+    var h = '';
+    if (S.view === 'loading') h = '<div class="loading">読み込み中…</div>';
+    else if (S.view === 'error') h = viewError();
+    else if (S.view === 'home') h = viewHome();
+    else if (S.view === 'pick') h = viewPick();
+    else if (S.view === 'join') h = viewJoin();
+    else if (S.view === 'group') h = viewGroup();
+    else if (S.view === 'event') h = viewEvent();
+    app.innerHTML = h;
+  }
+
+  function hero(msg, face) {
+    if (!S.group || !S.group.mascot || !window.ASSETS) return '';
+    var img = window.ASSETS[face || 'tsunaboru_normal'];
+    return '<div class="hero"><img src="' + img + '" alt=""><div class="bubble">' + esc(msg) + '</div></div>';
+  }
+
+  function viewError() {
+    return '<h1 style="margin-top:40px">開けませんでした</h1><p class="muted">' + esc(S.error) + '</p>' +
+      '<button class="btn ghost" data-act="reload">もう一度読み込む</button>';
+  }
+
+  function viewHome() {
+    var list = lsGet('sch.groups', []);
+    var h = '<h1 style="margin-top:20px">日程調整</h1>';
+    if (!list.length) return h + '<p class="muted">LINEなどで送られたリンクから開いてね。</p>';
+    h += '<p class="muted">前に開いたグループ</p>';
+    list.forEach(function (g) {
+      h += '<a class="card ev" style="text-decoration:none" href="' + esc(linkFor(g.token)) + '" target="_top"><div class="row"><div class="grow"><b>' + esc(g.name) + '</b></div><span class="muted">›</span></div></a>';
+    });
+    return h;
+  }
+
+  function viewPick() {
+    var g = S.group;
+    var h = '<div class="topbar"><span class="grp">' + esc(g.name) + '</span></div>';
+    h += hero('はじめに、自分を選んでね!', 'tsunaboru_normal');
+    if (g.kind === 'サークル') {
+      h += '<h1>あなたはだれ?</h1><div class="meta">名前を選ぶと、このスマホが覚えます</div>';
+      h += '<div class="field"><input data-in="search" placeholder="名前やふりがなでさがす" value="' + esc(S.search) + '"></div>';
+      if (!S.members) return h + '<div class="loading">読み込み中…</div>';
+      var q = S.search.replace(/\s/g, '');
+      S.members.filter(function (m) { return !q || (m.name + m.kana).replace(/\s/g, '').indexOf(q) >= 0; }).forEach(function (m) {
+        h += '<button class="card member" data-act="pickMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '">' +
+          '<b>' + esc(m.name) + '</b><span class="grade">' + esc(m.grade) + '</span><div class="kana">' + esc(m.kana) + '</div></button>';
+      });
+      h += '<div class="foot"><button class="link" data-act="toJoin">一覧に自分がいない</button></div>';
+      return h;
+    }
+    // サークル以外:名前を入れて加わる(前に入れた名前が最初から入っている)
+    var nm = S.joinName != null ? S.joinName : lsGet('sch.name', '');
+    h += '<h1>名前を入れて参加</h1><div class="meta">あだ名でもOK。このスマホが覚えます</div>';
+    h += '<div class="field"><input data-in="joinName" maxlength="20" placeholder="例)たろう" value="' + esc(nm) + '"></div>';
+    if (S.joinErr) h += '<div class="err">' + esc(S.joinErr) + '</div>';
+    h += '<button class="btn" data-act="joinSimple"' + (S.sending ? ' disabled' : '') + '>この名前で参加する</button>';
+    if (S.members && S.members.length) {
+      h += '<details><summary>前にこのグループに入ったことがある(名前を選ぶ)</summary>';
+      S.members.forEach(function (m) {
+        h += '<button class="card member" data-act="pickMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '"><b>' + esc(m.name) + '</b></button>';
+      });
+      h += '</details>';
+    }
+    return h;
+  }
+
+  function viewJoin() {
+    var j = S.join || {};
+    var h = '<div class="topbar"><button class="back" data-act="toPick">← 名前の一覧にもどる</button></div>';
+    h += '<h1>サークルに登録</h1><div class="meta">名前は幹事だけが管理する名簿に入ります</div>';
+    h += '<div class="field"><label>フルネーム</label><input data-in="j_name" maxlength="20" value="' + esc(j.name || '') + '" placeholder="例)会津 太郎"></div>';
+    h += '<div class="field"><label>ふりがな</label><input data-in="j_kana" maxlength="30" value="' + esc(j.kana || '') + '" placeholder="例)あいづ たろう"></div>';
+    h += '<div class="field"><label>学年</label><select data-in="j_grade">' + ['', '1年', '2年', '3年', '4年', 'その他'].map(function (v) {
+      return '<option value="' + v + '"' + (j.grade === v ? ' selected' : '') + '>' + (v || '選んでください') + '</option>'; }).join('') + '</select></div>';
+    h += '<div class="field"><label>性別</label><select data-in="j_gender">' + ['', '男性', '女性', '答えない'].map(function (v) {
+      return '<option value="' + v + '"' + (j.gender === v ? ' selected' : '') + '>' + (v || '選んでください') + '</option>'; }).join('') + '</select></div>';
+    if (S.joinErr) h += '<div class="err">' + esc(S.joinErr) + '</div>';
+    h += '<button class="btn" data-act="joinCircle"' + (S.sending ? ' disabled' : '') + '>登録する</button>';
+    return h;
+  }
+
+  function viewGroup() {
+    var g = S.group;
+    var todo = S.events.filter(function (e) { return !e.archived && !e.closed && !e.myAnswered && e.status !== '終了'; }).length;
+    var h = '<div class="topbar"><span class="grp">' + esc(g.name) + '</span><span class="grp">' + esc(S.me.name) + 'さん</span></div>';
+    h += hero(todo ? '答えていないのが' + todo + 'こあるよ!' : 'ぜんぶ答えてあるよ!', todo ? 'tsunaboru_normal' : 'tsunaboru_joy');
+    h += '<h1>イベント</h1>';
+    var live = S.events.filter(function (e) { return !e.archived; });
+    var old = S.events.filter(function (e) { return e.archived; });
+    if (!live.length) h += '<p class="muted">いまは、答えるイベントはありません。</p>';
+    live.forEach(function (e) { h += evCard(e); });
+    if (old.length) {
+      h += '<details><summary>終わったもの(' + old.length + ')</summary>';
+      old.forEach(function (e) { h += evCard(e); });
+      h += '</details>';
+    }
+    h += '<div class="foot"><button class="link" data-act="changeMe">' + esc(S.me.name) + 'さんではない</button></div>';
+    return h;
+  }
+
+  function evCard(e) {
+    var badge;
+    if (e.status === '終了') badge = '<span class="badge">終わり</span>';
+    else if (e.status === '出欠確認中') badge = e.myAnswered ? '<span class="badge done">出欠OK</span>' : '<span class="badge todo">出欠を答えてね</span>';
+    else if (e.closed) badge = '<span class="badge">締め切り</span>';
+    else badge = e.myAnswered ? '<span class="badge done">答えた</span>' : '<span class="badge todo">まだ</span>';
+    var sub = e.decided ? '決定:' + fmtDate(e.decided.date) + (e.decided.time ? ' ' + esc(e.decided.time) : '')
+      : (e.deadline ? '締め切り ' + fmtDate(e.deadline) : '');
+    return '<button class="card ev" data-act="openEvent" data-id="' + esc(e.id) + '"><div class="row"><div class="grow"><b>' + esc(e.name) + '</b>' +
+      (sub ? '<div class="muted">' + sub + '</div>' : '') + '</div>' + badge + '</div></button>';
+  }
+
+  function viewEvent() {
+    var g = S.group, d = S.ev;
+    var multi = S.events.length > 1 || g.kind !== '1回きり';
+    var h = '<div class="topbar">' + (multi ? '<button class="back" data-act="toGroup">← ' + esc(g.name) + '</button>' : '<span class="grp">' + esc(g.name) + '</span>') +
+      '<span class="grp">' + esc(S.me.name) + 'さん</span></div>';
+    if (!d) return h + '<div class="loading">読み込み中…</div>';
+    var ev = d.event;
+    var answered = Object.keys(d.mine.answers || {}).length > 0;
+    var msg, face = 'tsunaboru_normal';
+    if (ev.status === '出欠確認中') { msg = '日にちが決まったよ!'; face = 'tsunaboru_excited'; }
+    else if (ev.status === '終了') msg = 'このイベントは終わったよ';
+    else if (ev.closed) msg = '締め切りを過ぎたよ';
+    else if (answered) { msg = '答えてくれてありがとう!'; face = 'tsunaboru_joy'; }
+    else msg = '来られる日に○をつけてね!';
+    h += hero(msg, face);
+    h += '<h1>' + esc(ev.name) + '</h1>';
+    var meta = [];
+    if (ev.deadline && ev.status === '日程調整中') meta.push('締め切り <b>' + fmtDate(ev.deadline) + '</b>');
+    if (d.results && ev.status === '日程調整中') meta.push('回答 ' + d.results.answeredCount + (d.results.memberCount ? ' / ' + d.results.memberCount : '') + '人');
+    if (meta.length) h += '<div class="meta">' + meta.join(' ・ ') + '</div>';
+    h += detailBox(ev);
+    if (ev.status === '出欠確認中' || (ev.status === '終了' && ev.decided)) h += rsvpPart(d);
+    else h += pollPart(d);
+    h += resultsPart(d);
+    h += '<div class="foot"><button class="link" data-act="changeMe">' + esc(S.me.name) + 'さんではない</button></div>';
+    return h;
+  }
+
+  function detailBox(ev) {
+    var rows = [];
+    if (ev.description) rows.push('<div class="desc">' + esc(ev.description) + '</div>');
+    if (ev.place) rows.push('<div>📍 ' + esc(ev.place) + '</div>');
+    if (ev.cost) rows.push('<div>💴 ' + esc(ev.cost) + '</div>');
+    if (ev.url) rows.push('<div>🔗 <a href="' + esc(ev.url) + '" target="_blank" rel="noopener">' + esc(ev.url) + '</a></div>');
+    return rows.length ? '<div class="detail">' + rows.join('') + '</div>' : '';
+  }
+
+  function pollPart(d) {
+    var closed = d.event.closed || d.event.status === '終了';
+    var h = '';
+    if (!closed) h += '<div class="quick"><button class="chip" data-act="fillAll" data-v="○">全部○</button><button class="chip" data-act="fillAll" data-v="×">全部×</button></div>';
+    d.candidates.forEach(function (c) {
+      var cur = S.draft[c.id] || '';
+      h += '<div class="card row"><div class="date grow">' + fmtDate(c.date) + '<small>' + esc(c.time ? c.time + '〜' : '時間未定') + (c.memo ? ' ・ ' + esc(c.memo) : '') + '</small></div><div class="opts">' +
+        [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
+          return '<button class="opt ' + m[1] + (cur === m[0] ? ' on' : '') + '" data-act="mark" data-id="' + esc(c.id) + '" data-v="' + m[0] + '"' + (closed ? ' disabled' : '') + '>' + m[0] + '</button>';
+        }).join('') + '</div></div>';
+    });
+    if (closed) return h + '<div class="note">締め切りを過ぎたので、答えは変えられません。変えたいときは幹事に連絡してね。</div>';
+    h += '<div class="field"><label>ひとこと(なくてもOK)</label><input data-in="comment" maxlength="100" value="' + esc(S.comment) + '" placeholder="例)22日は少し遅れるかも"></div>';
+    var filled = d.candidates.filter(function (c) { return S.draft[c.id]; }).length;
+    h += '<button class="btn" data-act="sendAnswers"' + (S.sending || !filled ? ' disabled' : '') + '>' + (S.sending ? '送っています…' : (Object.keys(d.mine.answers || {}).length ? '答えを直して送る' : '送る')) + '</button>';
+    if (filled && filled < d.candidates.length) h += '<div class="muted center" style="margin-top:6px">まだ選んでいない日があります(そのままでも送れます)</div>';
+    return h;
+  }
+
+  function rsvpPart(d) {
+    var ev = d.event, dec = ev.decided;
+    var h = '<div class="decided"><div class="muted">決まった日</div><div class="big">' + fmtDate(dec.date) + (dec.time ? ' ' + esc(dec.time) + '〜' : '') + '</div>';
+    if (ev.calendar) {
+      h += '<div class="cal"><a class="btn ghost small" href="' + esc(ev.calendar.googleUrl) + '" target="_blank" rel="noopener">Googleカレンダーに追加</a>' +
+        '<a class="btn ghost small" href="data:text/calendar;charset=utf-8,' + encodeURIComponent(ev.calendar.ics) + '" download="event.ics">iPhoneのカレンダーに追加</a></div>';
+    }
+    h += '</div>';
+    if (ev.status === '終了') return h + '<div class="note">このイベントは終わりました。</div>';
+    var a = S.att;
+    h += '<div class="section">行ける?</div><div class="rsvp">' +
+      [['行く', 'go'], ['途中から', 'partial'], ['行かない', 'no']].map(function (m) {
+        return '<button class="' + m[1] + (a.status === m[0] ? ' on' : '') + '" data-act="att" data-v="' + m[0] + '">' + m[0] + '</button>';
+      }).join('') + '</div>';
+    if (a.status === '途中から') h += '<div class="field"><label>何時ごろ来られる?</label><input type="time" data-in="arriveAt" value="' + esc(a.arriveAt) + '"></div>';
+    h += '<div class="field"><label>ひとこと(なくてもOK)</label><input data-in="attComment" maxlength="100" value="' + esc(a.comment) + '"></div>';
+    h += '<button class="btn" data-act="sendAtt"' + (S.sending || !a.status ? ' disabled' : '') + '>' + (S.sending ? '送っています…' : '送る') + '</button>';
+    return h;
+  }
+
+  function resultsPart(d) {
+    var r = d.results;
+    var h = '<div class="section">みんなの回答</div>';
+    if (!r) return h + '<div class="note">このイベントの結果は、幹事だけが見られる設定です。</div>';
+    var ev = d.event;
+    if (r.attendance) {
+      var a = r.attendance;
+      h += '<div class="card"><div class="row"><b class="grow">出欠</b><span class="cnt"><span class="o">行く ' + a.go + '</span><span class="t">途中から ' + a.partial + '</span><span class="x">行かない ' + a.no + '</span></span></div>';
+      if (a.names) h += namesLines([['行', 'o', a.names.go], ['途', 't', a.names.partial], ['×', 'x', a.names.no]]);
+      h += '</div>';
+      if (ev.status !== '日程調整中') h += '<details><summary>日程調整のときの回答</summary>' + dateCards(r, ev) + '</details>';
+      return h;
+    }
+    if (!r.answeredCount) return h + '<div class="note">まだだれも答えていません。最初の1人になろう!</div>';
+    return h + dateCards(r, ev);
+  }
+
+  function dateCards(r, ev) {
+    var h = '';
+    var cmap = {};
+    S.ev.candidates.forEach(function (c) { cmap[c.id] = c; });
+    r.byDate.forEach(function (b) {
+      h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">いちばん多い日</div>' : '') +
+        '<div class="row"><b class="grow" style="font-size:16px">' + fmtDate(b.date) + (b.time ? ' <span class="muted">' + esc(b.time) + '</span>' : '') + '</b>' +
+        '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span></div>';
+      if (b.names) h += namesLines([['○', 'o', b.names.o], ['△', 't', b.names.t], ['×', 'x', b.names.x]]);
+      h += '</div>';
+    });
+    return h;
+  }
+
+  function namesLines(list) {
+    var h = '<div class="names">';
+    list.forEach(function (l) {
+      if (l[2] && l[2].length) h += '<div><span class="lab ' + l[1] + '">' + l[0] + '</span>' + l[2].map(esc).join('・') + '</div>';
+    });
+    return h + '</div>';
+  }
+
+  // ===== 操作 =====
+  var ACTIONS = {
+    reload: function () { location.reload(); },
+    pickMember: function (el) {
+      S.me = { memberId: el.getAttribute('data-id'), name: el.getAttribute('data-name') };
+      lsSet(meKey(), S.me.memberId); lsSet('sch.name', S.me.name);
+      toast(S.me.name + 'さん、ようこそ!');
+      S.view = 'loading'; render(); loadGroup(true);
+    },
+    toJoin: function () { S.view = 'join'; S.joinErr = ''; S.join = S.join || {}; render(); },
+    toPick: function () { S.view = 'pick'; S.joinErr = ''; render(); },
+    joinSimple: function () {
+      var name = (S.joinName != null ? S.joinName : lsGet('sch.name', '')).trim();
+      if (!name) { S.joinErr = '名前を入れてください'; render(); return; }
+      S.sending = true; S.joinErr = ''; render();
+      call('joinGroup', [TOKEN, { name: name }]).then(joined).catch(joinFailed);
+    },
+    joinCircle: function () {
+      var j = S.join || {};
+      if (!j.name || !j.kana || !j.grade) { S.joinErr = 'フルネーム・ふりがな・学年を入れてください'; render(); return; }
+      S.sending = true; S.joinErr = ''; render();
+      call('joinGroup', [TOKEN, { name: j.name, kana: j.kana, grade: j.grade, gender: j.gender }]).then(joined).catch(joinFailed);
+    },
+    changeMe: function () { lsDel(meKey()); S.me = null; S.view = 'pick'; S.members = null; render(); loadMembers(); },
+    toGroup: function () { S.view = 'loading'; render(); loadGroup(false); },
+    openEvent: function (el) { openEvent(el.getAttribute('data-id')); },
+    mark: function (el) { var id = el.getAttribute('data-id'), v = el.getAttribute('data-v'); S.draft[id] = S.draft[id] === v ? '' : v; render(); },
+    fillAll: function (el) { var v = el.getAttribute('data-v'); S.ev.candidates.forEach(function (c) { S.draft[c.id] = v; }); render(); },
+    sendAnswers: function () {
+      S.sending = true; render();
+      call('submitAnswers', [TOKEN, S.eventId, S.me.memberId, S.draft, S.comment]).then(function () {
+        S.sending = false; toast('送ったよ!'); openEvent(S.eventId);
+      }).catch(showError);
+    },
+    att: function (el) { S.att.status = el.getAttribute('data-v'); render(); },
+    sendAtt: function () {
+      S.sending = true; render();
+      call('submitAttendance', [TOKEN, S.eventId, S.me.memberId, S.att]).then(function () {
+        S.sending = false; toast('送ったよ!'); openEvent(S.eventId);
+      }).catch(showError);
+    }
+  };
+  function joined(d) {
+    S.sending = false;
+    S.me = { memberId: d.memberId, name: d.name };
+    lsSet(meKey(), d.memberId); lsSet('sch.name', d.name);
+    toast(d.name + 'さん、ようこそ!');
+    S.view = 'loading'; render(); loadGroup(true);
+  }
+  function joinFailed(err) { S.sending = false; S.joinErr = (err && err.message) || 'うまく登録できませんでした'; render(); }
+
+  // 入力欄:画面を描き直さずに値だけ覚える(打っている途中でカーソルが飛ばないように)
+  var INPUTS = {
+    search: function (v) { S.search = v; var pos = null; render(); var el = app.querySelector('[data-in=search]'); if (el) { el.focus(); el.setSelectionRange(v.length, v.length); } },
+    joinName: function (v) { S.joinName = v; },
+    comment: function (v) { S.comment = v; },
+    arriveAt: function (v) { S.att.arriveAt = v; },
+    attComment: function (v) { S.att.comment = v; },
+    j_name: function (v) { S.join.name = v; }, j_kana: function (v) { S.join.kana = v; },
+    j_grade: function (v) { S.join.grade = v; }, j_gender: function (v) { S.join.gender = v; }
+  };
+
+  app.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el || el.disabled) return;
+    var fn = ACTIONS[el.getAttribute('data-act')];
+    if (fn) { e.preventDefault(); fn(el); }
+  });
+  app.addEventListener('input', function (e) {
+    var k = e.target.getAttribute('data-in');
+    if (k && INPUTS[k]) INPUTS[k](e.target.value);
+  });
+  app.addEventListener('change', function (e) {
+    var k = e.target.getAttribute('data-in');
+    if (k && INPUTS[k] && e.target.tagName === 'SELECT') INPUTS[k](e.target.value);
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && S.view === 'event' && S.ev && !S.sending) openEvent(S.eventId);
+  });
+
+  start();
+})();
+</script>

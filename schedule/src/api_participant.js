@@ -115,7 +115,9 @@ function eventView_(g, ev, memberId, fresh) {
     event: { id: ev.id, name: ev.name, description: ev.description, place: ev.place, cost: ev.cost, url: ev.url,
       // 締め切りは日程調整のためのもの。出欠確認中は「終了」になるまで答えられる
       status: ev.status, deadline: ev.deadline, closed: ev.status === EV_RSVP ? false : isClosed(ev, today), visibility: ev.visibility,
-      decided: decided ? { candidateId: decided.id, date: decided.date, time: decided.time } : null },
+      decided: decided ? { candidateId: decided.id, date: decided.date, time: decided.time } : null,
+      // 決まった日をカレンダーに追加する用(Googleカレンダーのリンクと、iPhoneなどの .ics の中身)
+      calendar: decided ? calendarData({ title: ev.name, date: decided.date, time: decided.time, place: ev.place, url: ev.url }) : null },
     candidates: cands.map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo }; }),
     mine: {
       answers: mineA ? parseAnswers(mineA.answers) : {},

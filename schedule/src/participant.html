@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>日程調整</title>
+  <?!= include('participant_css') ?>
+</head>
+<body>
+  <div id="app" class="app"><div class="loading">読み込み中…</div></div>
+  <div id="toast" class="toast" hidden></div>
+  <script>
+    var TOKEN = '<?!= groupToken ?>';
+    var EVENT_PARAM = '<?!= eventId ?>';
+    var APP_URL = '<?!= appUrl ?>';
+  </script>
+  <?!= include('assets') ?>
+  <?!= include('participant_js') ?>
+</body>
+</html>

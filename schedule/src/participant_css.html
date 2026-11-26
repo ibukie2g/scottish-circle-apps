@@ -1,0 +1,100 @@
+<style>
+  /* 案B:シンプル+キャラクターを少し(出欠アプリ/03_デザイン.md) */
+  :root {
+    --bg: #fbfaf7; --card: #ffffff; --ink: #1d1d1b; --sub: #6b6a65; --line: #ebe9e3; --soft: #f1efe9;
+    --o: #2f9e6a; --t: #e2a52c; --t-ink: #b98318; --x: #8e8d86; --accent: #1d1d1b; --danger: #c2543f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif; font-size: 15px; line-height: 1.5; }
+  .app { max-width: 480px; margin: 0 auto; padding: 16px 16px calc(32px + env(safe-area-inset-bottom)); min-height: 100vh; }
+  .loading { padding: 80px 0; text-align: center; color: var(--sub); }
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
+  button:disabled { cursor: default; opacity: .55; }
+  input, select, textarea { font: inherit; font-size: 16px; color: var(--ink); }
+  a { color: inherit; }
+
+  /* 上の部分 */
+  .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 6px; }
+  .back { font-size: 14px; color: var(--sub); padding: 4px 0; }
+  .grp { font-size: 12.5px; color: var(--sub); }
+  .hero { display: flex; align-items: flex-end; gap: 8px; margin: 4px 0 10px; }
+  .hero img { width: 70px; height: auto; flex: none; }
+  .bubble { background: #fff; border: 1.5px solid #3b3a36; border-radius: 14px; padding: 8px 11px; font-size: 13.5px; font-weight: 700; margin-bottom: 22px; }
+  h1 { font-size: 21px; margin: 2px 0 2px; line-height: 1.35; }
+  .meta { font-size: 13px; color: var(--sub); margin-bottom: 12px; }
+  .meta b { color: var(--ink); font-weight: 700; }
+
+  /* くわしく */
+  .detail { background: var(--card); border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
+  .detail div + div { margin-top: 3px; }
+  .detail .desc { white-space: pre-wrap; color: var(--ink); }
+  .detail a { color: #2a6fc0; word-break: break-all; }
+
+  /* カード・一覧 */
+  .card { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 8px; box-shadow: 0 1px 0 var(--line); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .grow { flex: 1; min-width: 0; }
+  .date { font-weight: 700; font-size: 16px; }
+  .date small { display: block; font-weight: 400; font-size: 12px; color: var(--sub); }
+  .section { font-size: 14px; font-weight: 700; margin: 20px 0 8px; }
+  .muted { color: var(--sub); font-size: 13px; }
+  .center { text-align: center; }
+
+  /* ○△× */
+  .opts { display: flex; gap: 6px; flex: none; }
+  .opt { width: 44px; height: 44px; border-radius: 11px; background: var(--soft); color: #a8a69d; font-weight: 700; font-size: 18px; display: grid; place-items: center; }
+  .opt.o.on { background: var(--o); color: #fff; }
+  .opt.t.on { background: var(--t); color: #fff; }
+  .opt.x.on { background: var(--x); color: #fff; }
+  .quick { display: flex; gap: 8px; margin: 0 0 8px; }
+  .chip { font-size: 13px; padding: 6px 12px; border-radius: 99px; background: var(--card); border: 1px solid var(--line); }
+
+  /* ボタン */
+  .btn { display: block; width: 100%; background: var(--accent); color: #fff; text-align: center; padding: 14px; border-radius: 99px; font-weight: 700; font-size: 16px; margin-top: 12px; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--line); }
+  .btn.small { display: inline-block; width: auto; padding: 9px 16px; font-size: 14px; margin-top: 0; }
+  a.btn { text-decoration: none; }
+  .link { color: var(--sub); font-size: 13px; text-decoration: underline; padding: 6px 0; }
+
+  /* 入力 */
+  .field { margin: 10px 0; }
+  .field label { display: block; font-size: 13px; color: var(--sub); margin-bottom: 4px; }
+  .field input, .field select, .field textarea { width: 100%; padding: 11px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: #fff; }
+  .field textarea { min-height: 64px; resize: vertical; }
+
+  /* 結果 */
+  .res.best { outline: 2px solid var(--o); }
+  .crown { font-size: 12px; color: var(--o); font-weight: 700; }
+  .cnt { font-size: 13px; white-space: nowrap; }
+  .cnt .o { color: var(--o); } .cnt .t { color: var(--t-ink); } .cnt .x { color: var(--x); }
+  .cnt span + span { margin-left: 8px; }
+  .names { font-size: 12.5px; margin-top: 4px; color: var(--ink); line-height: 1.6; }
+  .names .lab { display: inline-block; width: 1.4em; font-weight: 700; }
+  .names .lab.o { color: var(--o); } .names .lab.t { color: var(--t-ink); } .names .lab.x { color: var(--x); }
+
+  /* 出欠 */
+  .decided { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 12px; border: 2px solid var(--o); text-align: center; }
+  .decided .big { font-size: 24px; font-weight: 700; }
+  .cal { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+  .rsvp { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .rsvp button { padding: 14px 4px; border-radius: 14px; background: var(--card); border: 1.5px solid var(--line); font-weight: 700; }
+  .rsvp button.on.go { background: var(--o); border-color: var(--o); color: #fff; }
+  .rsvp button.on.partial { background: var(--t); border-color: var(--t); color: #fff; }
+  .rsvp button.on.no { background: var(--x); border-color: var(--x); color: #fff; }
+
+  /* イベント一覧 */
+  .ev { display: block; width: 100%; text-align: left; }
+  .badge { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; background: var(--soft); color: var(--sub); white-space: nowrap; }
+  .badge.todo { background: #fff3d6; color: #8a5a00; font-weight: 700; }
+  .badge.done { background: #e3f3ea; color: #1f7a4f; }
+  .member { display: block; width: 100%; text-align: left; padding: 12px; }
+  .member .kana { font-size: 12px; color: var(--sub); }
+  .grade { font-size: 12px; color: var(--sub); margin-left: 6px; }
+
+  .note { font-size: 13px; color: var(--sub); background: var(--card); border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
+  .err { color: var(--danger); font-size: 14px; margin: 8px 0; }
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 99px; font-size: 14px; font-weight: 700; z-index: 10; max-width: 90vw; }
+  .foot { margin-top: 28px; text-align: center; }
+  details summary { cursor: pointer; color: var(--sub); font-size: 13px; margin: 12px 0 8px; }
+</style>
