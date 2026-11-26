@@ -6,11 +6,11 @@
 | 何を | どこ |
 |---|---|
 | リポジトリの説明 | `README.md` |
-| 合同運動会アプリの仕様(最新の決定は「4-2. UI・UXの壁打ちで決めたこと」と【決定】) | `C:\Users\ibuki\OneDrive\Univ\スコサー\2026年度\合同運動会\Webアプリ仕様書.md`(リポジトリの外。読むだけ) |
+| 合同運動会アプリの仕様(最新の決定は「4-2. UI・UXの壁打ちで決めたこと」と【決定】) | `C:\Users\ibuki\OneDrive\Univ\スコサー\合同運動会\Webアプリ仕様書.md`(リポジトリの外。読むだけ) |
 | シートの構成(データの約束) | `sports-day/docs/データ設計.md` |
 | 画面とサーバーのやりとりの約束 | `sports-day/docs/API.md`(画面を作るときはこれだけを見て作る) |
-| UIの参考 | `C:\Users\ibuki\OneDrive\Univ\スコサー\2026年度\合同運動会\参考_AiCTハッカソンのUI.md` |
-| マスコットの画像 | `C:\Users\ibuki\OneDrive\Univ\スコサー\2026年度\合同運動会\画像\`(つなボル=メイン、シャトまる、ミックル) |
+| UIの参考 | `C:\Users\ibuki\OneDrive\Univ\スコサー\合同運動会\参考_AiCTハッカソンのUI.md` |
+| マスコットの画像 | `C:\Users\ibuki\OneDrive\Univ\スコサー\合同運動会\画像\`(つなボル=メイン、シャトまる、ミックル) |
 
 ## sports-day(合同運動会アプリ、2026-11-24本番)
 - Google Apps Script(アプリ用スプレッドシートに紐づいたスクリプト)。`sports-day/src/` が clasp の rootDir

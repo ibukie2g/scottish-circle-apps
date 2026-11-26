@@ -11,8 +11,8 @@
 2. 次の資料を読んでください
    - sports-day/docs/API.md(サーバーの関数の一覧。画面からはここに書いてある関数だけを使う)
    - sports-day/docs/データ設計.md
-   - C:\Users\ibuki\OneDrive\Univ\スコサー\2026年度\合同運動会\Webアプリ仕様書.md の「4-2. UI・UXの壁打ちで決めたこと」(運営画面の決定が書いてあります)
-   - C:\Users\ibuki\OneDrive\Univ\スコサー\2026年度\合同運動会\参考_AiCTハッカソンのUI.md
+   - C:\Users\ibuki\OneDrive\Univ\スコサー\合同運動会\Webアプリ仕様書.md の「4-2. UI・UXの壁打ちで決めたこと」(運営画面の決定が書いてあります)
+   - C:\Users\ibuki\OneDrive\Univ\スコサー\合同運動会\参考_AiCTハッカソンのUI.md
 
 ■ 作るもの:運営画面(sports-day/src/ の運営画面用HTMLファイル)
 ・スマホ縦向きで操作する。画面の下にタブを5つ並べる
