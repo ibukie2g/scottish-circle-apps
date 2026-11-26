@@ -72,7 +72,7 @@ data = { memberId: 'M021', name: 'たろう' }
 ### `getEvent(token, eventId, memberId)`
 ```js
 data = {
-  event: { id, name, description, status, deadline, visibility: '名前' | '人数' | '伊吹だけ', courses: ['飲み放題つき 4000円', 'ソフトドリンク 3000円'] },
+  event: { id, name, description, place, cost, url, status, deadline, visibility: '名前' | '人数' | '伊吹だけ' },  // description/place/cost/url は決まっているものだけ(空文字なら画面に出さない)
   candidates: [ { id: 'C01', date: '2026-12-15', time: '19:00', memo: '' } ],
   mine: { answers: { C01: '○', C02: '△' }, comment: '', attendance: { status, course, comment } | null },
   results: null | {                       // visibility が「伊吹だけ」なら null
@@ -105,10 +105,10 @@ data = { savedAt }
 | `adminLogin(password)` | ログイン | `{ token }`(6時間有効) |
 | `adminListGroups(token)` | グループとイベントの一覧(管理ファイルの控えから。軽い) | グループごとに、未回答の多いイベント・締め切りが近いイベント |
 | `adminCreateGroup(token, { name, kind, mascot })` | グループを作る。**グループのファイルを自動で作る**。サークルなら名簿の全員をメンバーに入れる | `{ groupId, link }` |
-| `adminCreateEvent(token, groupId, { name, description, visibility, deadline, courses, candidates: [{ date, time, memo }] })` | イベントを作る。1回きりの種類を選んだら、グループとイベントを一度に作る | `{ eventId, link }` |
+| `adminCreateEvent(token, groupId, { name, description, place, cost, url, visibility, deadline, candidates: [{ date, time, memo }] })` | イベントを作る。1回きりの種類を選んだら、グループとイベントを一度に作る | `{ eventId, link }` |
 | `adminAddCandidates(token, eventId, candidates)` | 候補日を足す | 候補日の一覧 |
 | `adminRemoveCandidate(token, eventId, candidateId)` | 候補日を消す(答えも消える。確認を出してから呼ぶ) | 候補日の一覧 |
-| `adminUpdateEvent(token, eventId, patch)` | 名前・説明・締め切り・結果の見せ方・コースを変える | イベント |
+| `adminUpdateEvent(token, eventId, patch)` | 名前・説明・場所・お金の目安・リンク・締め切り・結果の見せ方を変える(あとから決まったら足せる) | イベント |
 | `adminGetResults(token, eventId, filter)` | 結果を全部見る。`filter = { grade, gender }`(サークルだけ) | 下の形 |
 | `adminSetWanted(token, eventId, memberIds)` | 来てほしい人の印 | 来てほしい人の一覧 |
 | `adminDecide(token, eventId, candidateId)` | 日にちを決めて「出欠確認中」にする(○→行く、×→行かない を仮に入れる) | イベント |
