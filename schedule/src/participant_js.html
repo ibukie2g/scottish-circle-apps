@@ -151,8 +151,8 @@
     }
     // サークル以外:名前を入れて加わる(前に入れた名前が最初から入っている)
     var nm = S.joinName != null ? S.joinName : lsGet('sch.name', '');
-    h += '<h1>名前を入れて参加</h1><div class="meta">あだ名でもOK。このスマホが覚えます</div>';
-    h += '<div class="field"><input data-in="joinName" maxlength="20" placeholder="例)たろう" value="' + esc(nm) + '"></div>';
+    h += '<h1>名前を入れて参加</h1><div class="meta">みんながわかる名前で。このスマホが覚えます</div>';
+    h += '<div class="field"><input data-in="joinName" maxlength="20" placeholder="例)会津 太郎" value="' + esc(nm) + '"></div>';
     if (S.joinErr) h += '<div class="err">' + esc(S.joinErr) + '</div>';
     h += '<button class="btn" data-act="joinSimple"' + (S.sending ? ' disabled' : '') + '>この名前で参加する</button>';
     if (S.members && S.members.length) {
