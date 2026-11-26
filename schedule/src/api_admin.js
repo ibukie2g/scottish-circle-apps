@@ -285,7 +285,6 @@ function adminGetResults(token, groupId, eventId, filter) {
         unanswered: members.filter(function (m) { return m.active && !(rmap[m.memberId] && rmap[m.memberId].status); }).map(function (m) { return m.name; })
       };
     }
-    var remindNames = att ? att.unanswered : un.map(function (m) { return m.name; });
     return {
       event: eventForAdmin_(g, ev),
       answeredCount: s.answeredCount, memberCount: members.filter(function (m) { return m.active; }).length,
@@ -294,7 +293,7 @@ function adminGetResults(token, groupId, eventId, filter) {
         .map(function (m) { return { name: m.name, comment: byMember[m.memberId].comment }; }),
       unanswered: un.map(function (m) { return { memberId: m.memberId, name: m.name }; }),
       wanted: wanted,
-      remindText: remindText(ev, remindNames, eventLink_(g, ev)),
+      shareText: shareText(ev, (function () { var c = cands.filter(function (x) { return x.id === ev.decidedId; })[0]; return ev.status === EV_RSVP && c ? { date: c.date, time: c.time } : null; })(), eventLink_(g, ev)),
       attendance: att,
       // 運営が代わりに入れるとき用:メンバーごとの答え
       answersByMember: members.filter(function (m) { return m.active; }).map(function (m) {

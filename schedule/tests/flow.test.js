@@ -93,8 +93,8 @@ test('友達グループ:表示名で加わり、日程調整 → 結果 → 日
 
   // 運営の結果:未回答と催促文
   const r = ok(g.adminGetResults(token, gid, ev.eventId, {}));
-  assert.deepEqual(r.unanswered.map(m => m.name), ['じろう']);
-  assert.match(r.remindText, /^【忘年会】まだの人お願いします🙏\nじろうさん\n締め切り 12\/5\(/);
+  assert.match(r.shareText, /^【忘年会】来られる日を教えてください🙌\n締め切り 12\/5\(/);
+  assert.ok(!r.shareText.includes('じろう'), '名指ししない');
   assert.deepEqual(r.comments, [{ name: 'たろう', comment: '15日は微妙' }]);
 
   // 日にちを決める → ○の人は「行く」、×の人は「行かない」が仮に入る

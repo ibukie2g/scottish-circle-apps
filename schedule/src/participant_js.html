@@ -229,7 +229,7 @@
     h += '<h1>' + esc(ev.name) + '</h1>';
     var meta = [];
     if (ev.deadline && ev.status === '日程調整中') meta.push('締め切り <b>' + fmtDate(ev.deadline) + '</b>');
-    if (d.results && ev.status === '日程調整中') meta.push('回答 ' + d.results.answeredCount + (d.results.memberCount ? ' / ' + d.results.memberCount : '') + '人');
+    if (d.results && ev.status === '日程調整中') meta.push('回答 ' + d.results.answeredCount + '人');
     if (meta.length) h += '<div class="meta">' + meta.join(' ・ ') + '</div>';
     h += detailBox(ev);
     if (ev.status === '出欠確認中' || (ev.status === '終了' && ev.decided)) h += rsvpPart(d);

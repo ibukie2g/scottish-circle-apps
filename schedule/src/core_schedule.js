@@ -191,6 +191,24 @@ function remindText(event, names, link) {
   return lines.join('\n');
 }
 
+/**
+ * LINEに流す文(名指しはしない。11/27 伊吹:行かない人はそもそも答えないので、名前を挙げて促す必要はない)
+ * decided = { date, time } があれば「決まりました」の文、なければ「日程を教えて」の文
+ */
+function shareText(event, decided, link) {
+  var lines = [];
+  if (decided) {
+    lines.push('【' + event.name + '】' + formatDateJa(decided.date) + (decided.time ? ' ' + decided.time : '') + ' に決まりました!');
+    lines.push('行けるかどうか、ここから教えてください🙌');
+  } else {
+    lines.push('【' + event.name + '】来られる日を教えてください🙌');
+    if (event.deadline) lines.push('締め切り ' + formatDateJa(event.deadline));
+  }
+  if (event.place) lines.push('📍 ' + event.place);
+  if (link) lines.push(link);
+  return lines.join('\n');
+}
+
 /** 締め切りを過ぎたか(締め切りの日の 23:59 まではOK)。nowYmd は 'YYYY-MM-DD'(日本時間) */
 function isClosed(event, nowYmd) {
   if (!event) return true;
@@ -270,6 +288,6 @@ if (typeof module !== 'undefined' && module.exports) {
     parseAnswers: parseAnswers, formatAnswers: formatAnswers, normalizeName: normalizeName, nameLength: nameLength,
     formatDateJa: formatDateJa, expandDates: expandDates, sortCandidates: sortCandidates, filterMembers: filterMembers,
     unanswered: unanswered, summarize: summarize, summarizeAttendance: summarizeAttendance, presetAttendance: presetAttendance,
-    remindText: remindText, isClosed: isClosed, isArchived: isArchived, nextId: nextId, calendarData: calendarData
+    remindText: remindText, shareText: shareText, isClosed: isClosed, isArchived: isArchived, nextId: nextId, calendarData: calendarData
   };
 }

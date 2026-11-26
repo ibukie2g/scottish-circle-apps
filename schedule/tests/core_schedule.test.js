@@ -93,6 +93,13 @@ test('催促文', () => {
   assert.equal(t, '【忘年会の日程】まだの人お願いします🙏\n青木さん、石井さん\n締め切り 12/5(土)\nhttps://example.com/x');
 });
 
+test('LINEに流す文(名指しなし)', () => {
+  assert.equal(C.shareText({ name: '忘年会', deadline: '2026-12-05', place: '駅前' }, null, 'https://x'),
+    '【忘年会】来られる日を教えてください🙌\n締め切り 12/5(土)\n📍 駅前\nhttps://x');
+  assert.equal(C.shareText({ name: '忘年会' }, { date: '2026-12-22', time: '19:00' }, 'https://x'),
+    '【忘年会】12/22(火) 19:00 に決まりました!\n行けるかどうか、ここから教えてください🙌\nhttps://x');
+});
+
 test('締め切りと、終わったものをしまう判定', () => {
   const ev = { status: '日程調整中', deadline: '2026-12-05' };
   assert.equal(C.isClosed(ev, '2026-12-05'), false);
