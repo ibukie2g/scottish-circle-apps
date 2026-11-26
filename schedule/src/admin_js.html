@@ -151,7 +151,7 @@
       '<select data-in="f.weeks" style="padding:5px;border:1.5px solid var(--line);border-radius:8px">' + [2, 3, 4, 6, 8].map(function (n) { return '<option' + (+f.weeks === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select><span class="sub">週分</span>' +
       '<button class="btn ghost sm" data-act="addWeekly">足す</button></div>';
     h += '<div class="picked">' + (f.cands.length ? f.cands.map(function (c, i) {
-      return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') : '<span class="sub">カレンダーで日付をクリックして選んでください</span>') + '</div></div>';
+      return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="dupDay" data-i="' + i + '" title="この日に別の時間を足す">＋時間</button><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') : '<span class="sub">カレンダーで日付をクリックして選んでください</span>') + '</div></div>';
     h += '<div class="card">' + eventFields(f) + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '') +
       '<button class="btn" style="width:100%;margin-top:8px" data-act="createEvent"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? '作っています…' : '作ってリンクを出す') + '</button></div></div>';
     return h;
@@ -273,7 +273,7 @@
     }
     if (m.type === 'addCand') {
       return '<h2 style="margin-top:0">候補日を足す</h2>' + calendar() + '<div class="picked">' + S.form.cands.map(function (c, i) {
-        return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') + '</div>' +
+        return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="dupDay" data-i="' + i + '" title="この日に別の時間を足す">＋時間</button><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') + '</div>' +
         '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveCands">足す</button></div>';
     }
     return '';
@@ -317,11 +317,22 @@
     pickDay: function (el) {
       var d = el.getAttribute('data-d'), f = S.form;
       var i = f.cands.map(function (c) { return c.date; }).indexOf(d);
-      if (i >= 0) f.cands.splice(i, 1); else f.cands.push({ date: d, time: f.defTime });
+      if (i >= 0) f.cands = f.cands.filter(function (c) { return c.date !== d; }); else f.cands.push({ date: d, time: f.defTime });
       f.cands.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); render();
     },
+    // 同じ日に別の時間の候補を足す(例:12/15 の 18:00 と 20:00)
+    dupDay: function (el) {
+      var i = +el.getAttribute('data-i'), c = S.form.cands[i];
+      S.form.cands.splice(i + 1, 0, { date: c.date, time: '' });
+      render();
+      var inp = app.querySelector('[data-in="c.time"][data-i="' + (i + 1) + '"]'); if (inp) inp.focus();
+    },
     unpick: function (el) { S.form.cands.splice(+el.getAttribute('data-i'), 1); render(); },
-    applyTime: function () { S.form.cands.forEach(function (c) { c.time = S.form.defTime; }); render(); },
+    applyTime: function () {
+      // 同じ日に時間を複数入れた日は、そのまま残す
+      var n = {}; S.form.cands.forEach(function (c) { n[c.date] = (n[c.date] || 0) + 1; });
+      S.form.cands.forEach(function (c) { if (n[c.date] === 1) c.time = S.form.defTime; }); render();
+    },
     addWeekly: function () {
       var f = S.form, start = new Date(), have = {};
       f.cands.forEach(function (c) { have[c.date] = true; });
