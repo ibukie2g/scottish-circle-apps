@@ -1,0 +1,444 @@
+<script>
+(function () {
+  'use strict';
+  var WD = ['日', '月', '火', '水', '木', '金', '土'];
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function pad(n) { return ('0' + n).slice(-2); }
+  function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function fmtDate(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+    if (!m) return esc(s);
+    var d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return (+m[2]) + '/' + (+m[3]) + '(' + WD[d.getDay()] + ')';
+  }
+  function lsGet(k, def) { try { var v = localStorage.getItem(k); return v === null ? def : JSON.parse(v); } catch (e) { return def; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* */ } }
+  var toastTimer;
+  function toast(m) { var t = document.getElementById('toast'); t.textContent = m; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2200); }
+  function call(fn, args) {
+    return new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) return resolve(res.data);
+          var err = (res && res.error) || { code: 'INTERNAL', message: 'エラーが起きました' };
+          if (err.code === 'AUTH' && fn !== 'adminLogin') { lsSet('sch.admin', ''); S.token = ''; S.view = 'login'; render(); }
+          reject(err);
+        })
+        .withFailureHandler(function () { reject({ code: 'NETWORK', message: '通信できませんでした' }); })[fn].apply(null, [S.token].concat(args || []));
+    });
+  }
+  function fail(err) { S.busy = false; toast((err && err.message) || 'エラーが起きました'); render(); }
+  function qrImg(text) {
+    if (!window.qrcode) return '';
+    var q = qrcode(0, 'M'); q.addData(text); q.make();
+    return q.createDataURL(6, 2);
+  }
+  function copy(text) {
+    var ok = function () { toast('コピーしました'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, function () { fallbackCopy(text); ok(); });
+    else { fallbackCopy(text); ok(); }
+  }
+  function fallbackCopy(text) { var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch (e) { /* */ } t.remove(); }
+
+  var S = { token: lsGet('sch.admin', ''), view: 'loading', groups: [], group: null, res: null, filter: {}, busy: false, modal: null, form: null, err: '' };
+  var app = document.getElementById('app');
+
+  // ===== 読み込み =====
+  function loadHome() {
+    S.view = 'loading'; render();
+    call('adminListGroups').then(function (d) { S.groups = d.groups; S.view = 'home'; render(); }).catch(fail);
+  }
+  function loadGroup(id) {
+    S.view = 'loading'; render();
+    call('adminGetGroup', [id]).then(function (d) { S.group = d; S.view = 'group'; render(); }).catch(fail);
+  }
+  function loadEvent(gid, eid, keep) {
+    if (!keep) { S.view = 'loading'; render(); }
+    var gp = S.group && S.group.group.id === gid ? Promise.resolve(S.group) : call('adminGetGroup', [gid]).then(function (d) { S.group = d; return d; });
+    gp.then(function () { return call('adminGetResults', [gid, eid, S.filter]); })
+      .then(function (d) { S.res = d; S.view = 'event'; S.busy = false; render(); }).catch(fail);
+  }
+
+  // ===== 画面 =====
+  function render() {
+    var h = '';
+    if (S.view === 'loading') h = '<div class="loading">読み込み中…</div>';
+    else if (S.view === 'login') h = viewLogin();
+    else if (S.view === 'home') h = viewHome();
+    else if (S.view === 'newGroup') h = viewNewGroup();
+    else if (S.view === 'group') h = viewGroup();
+    else if (S.view === 'newEvent') h = viewNewEvent();
+    else if (S.view === 'event') h = viewEvent();
+    if (S.modal) h += '<div class="modal-bg" data-act="closeModal"><div class="modal" data-stop="1">' + viewModal() + '</div></div>';
+    app.innerHTML = h;
+  }
+
+  function viewLogin() {
+    return '<div class="login card"><h1>日程調整 運営</h1><p class="sub">運営のパスワードを入れてください</p>' +
+      '<div class="field"><input type="password" data-in="pw" autocomplete="current-password"></div>' +
+      (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '') +
+      '<button class="btn" data-act="login"' + (S.busy ? ' disabled' : '') + '>ログイン</button></div>';
+  }
+
+  function badge(st) {
+    return st === '日程調整中' ? '<span class="badge poll">日程調整中</span>' : st === '出欠確認中' ? '<span class="badge rsvp">出欠確認中</span>' : '<span class="badge">終了</span>';
+  }
+
+  function viewHome() {
+    var h = '<div class="top"><div class="grow"><h1>日程調整 運営</h1><div class="sub">グループとイベントの一覧</div></div>' +
+      '<button class="btn ghost" data-act="newOnce">1回きりのイベントを作る</button><button class="btn" data-act="newGroup">グループを作る</button></div>';
+    if (!S.groups.length) return h + '<div class="card">まだグループがありません。「グループを作る」から始めましょう。</div>';
+    h += '<div class="grid">';
+    S.groups.forEach(function (g) {
+      var live = g.events.filter(function (e) { return !e.archived; });
+      h += '<div class="card"><div class="row"><div class="grow"><b style="font-size:16px">' + esc(g.name) + '</b> <span class="badge">' + esc(g.kind) + '</span>' +
+        '<div class="sub">メンバー ' + g.memberCount + '人 ・ イベント ' + live.length + '</div></div>' +
+        '<button class="btn ghost sm" data-act="openGroup" data-id="' + esc(g.id) + '">開く</button></div>';
+      live.slice(0, 4).forEach(function (e) {
+        h += '<button class="evline" data-act="openEvent" data-g="' + esc(g.id) + '" data-id="' + esc(e.id) + '"><span class="grow">' + esc(e.name) + '</span>' +
+          '<span class="sub">' + e.answered + '人</span>' + badge(e.status) + '</button>';
+      });
+      h += '</div>';
+    });
+    return h + '</div>';
+  }
+
+  function viewNewGroup() {
+    var f = S.form;
+    var kinds = [['サークル', '名簿(運動会の名簿)の人が最初からメンバー。未回答の人がわかる。学年・男女で絞れる'],
+      ['グループ', '男子飲み会・研究室・友達など。リンクを開いた人が名前を入れて加わる'],
+      ['1回きり', 'このイベントだけ。カラオケなど、グループを作るほどでもない予定']];
+    var h = '<div class="top"><div class="grow"><div class="crumb"><button data-act="home">一覧</button> ›</div><h1>グループを作る</h1></div></div><div class="card" style="max-width:720px">';
+    h += '<div class="field"><label>名前</label><input data-in="f.name" maxlength="30" value="' + esc(f.name) + '" placeholder="例)男子飲み会"></div>';
+    h += '<div class="field"><label>種類</label><div class="kinds">' + kinds.slice(0, 2).map(function (k) {
+      return '<button class="kind' + (f.kind === k[0] ? ' on' : '') + '" data-act="setKind" data-v="' + k[0] + '"><b>' + k[0] + '</b><span>' + k[1] + '</span></button>'; }).join('') + '</div>' +
+      '<div class="hint">1回きりのイベントは、一覧の「1回きりのイベントを作る」から作ります</div></div>';
+    h += '<div class="field"><label>つなぼる(キャラクター)</label><div class="seg"><button class="' + (f.mascot ? 'on' : '') + '" data-act="setMascot" data-v="1">出す</button><button class="' + (!f.mascot ? 'on' : '') + '" data-act="setMascot" data-v="0">出さない</button></div></div>';
+    if (S.err) h += '<div class="err">' + esc(S.err) + '</div>';
+    h += '<button class="btn" data-act="createGroup"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? '作っています…(ファイルを作るので少しかかります)' : '作る') + '</button></div>';
+    return h;
+  }
+
+  function viewGroup() {
+    var d = S.group, g = d.group;
+    var h = '<div class="top"><div class="grow"><div class="crumb"><button data-act="home">一覧</button> ›</div><h1>' + esc(g.name) + ' <span class="badge">' + esc(g.kind) + '</span></h1></div>' +
+      '<button class="btn ghost" data-act="showLink" data-link="' + esc(g.link) + '" data-title="' + esc(g.name) + 'のリンク">リンク・QR</button>' +
+      '<button class="btn" data-act="newEvent">イベントを作る</button></div>';
+    h += '<div class="cols"><div><h2 style="margin-top:0">イベント</h2>';
+    if (!d.events.length) h += '<div class="card">まだイベントがありません。</div>';
+    d.events.slice().reverse().forEach(function (e) {
+      h += '<button class="card evline" style="margin-bottom:8px" data-act="openEvent" data-g="' + esc(g.id) + '" data-id="' + esc(e.id) + '"><span class="grow"><b>' + esc(e.name) + '</b>' +
+        '<div class="sub">候補 ' + e.candidates.length + '日' + (e.deadline ? ' ・ 締め切り ' + fmtDate(e.deadline) : '') + '</div></span>' + badge(e.status) + '</button>';
+    });
+    h += '</div><div><h2 style="margin-top:0">メンバー(' + d.members.length + '人)</h2><div class="card" style="max-height:420px;overflow:auto">';
+    d.members.forEach(function (m) { h += '<div style="padding:3px 0">' + esc(m.name) + (m.grade ? ' <span class="sub">' + esc(m.grade) + '</span>' : '') + '</div>'; });
+    h += '</div><h2>設定</h2><div class="card"><div class="row" style="margin-bottom:10px"><span class="grow">つなぼる</span><div class="seg">' +
+      '<button class="' + (g.mascot ? 'on' : '') + '" data-act="groupMascot" data-v="1">出す</button><button class="' + (!g.mascot ? 'on' : '') + '" data-act="groupMascot" data-v="0">出さない</button></div></div>' +
+      (g.kind === 'サークル' ? '<div class="row" style="margin-bottom:10px"><span class="grow">名簿の新しい人を足す</span><button class="btn ghost sm" data-act="syncRoster">読み直す</button></div>' : '') +
+      '<div class="row"><span class="grow">一覧からしまう(ファイルは残る)</span><button class="btn danger sm" data-act="archiveGroup">しまう</button></div></div></div></div>';
+    return h;
+  }
+
+  // ---- イベントを作る ----
+  function viewNewEvent() {
+    var f = S.form;
+    var title = f.once ? '1回きりのイベントを作る' : (esc(S.group.group.name) + 'にイベントを作る');
+    var h = '<div class="top"><div class="grow"><div class="crumb"><button data-act="' + (f.once ? 'home' : 'backGroup') + '">戻る</button> ›</div><h1>' + title + '</h1></div></div>';
+    h += '<div class="cols"><div class="card"><h2 style="margin-top:0">候補日</h2>' + calendar() +
+      '<div class="row" style="margin-top:10px;flex-wrap:wrap"><span class="sub">時刻(まとめて)</span><input type="time" data-in="f.defTime" value="' + esc(f.defTime) + '" style="padding:5px 8px;border:1.5px solid var(--line);border-radius:8px">' +
+      '<button class="btn ghost sm" data-act="applyTime">全部にあてる</button><span class="sub" style="margin-left:8px">毎週</span><select data-in="f.wd" style="padding:5px;border:1.5px solid var(--line);border-radius:8px">' +
+      WD.map(function (w, i) { return '<option value="' + i + '"' + (+f.wd === i ? ' selected' : '') + '>' + w + '曜</option>'; }).join('') + '</select>' +
+      '<select data-in="f.weeks" style="padding:5px;border:1.5px solid var(--line);border-radius:8px">' + [2, 3, 4, 6, 8].map(function (n) { return '<option' + (+f.weeks === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select><span class="sub">週分</span>' +
+      '<button class="btn ghost sm" data-act="addWeekly">足す</button></div>';
+    h += '<div class="picked">' + (f.cands.length ? f.cands.map(function (c, i) {
+      return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') : '<span class="sub">カレンダーで日付をクリックして選んでください</span>') + '</div></div>';
+    h += '<div class="card">' + eventFields(f) + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '') +
+      '<button class="btn" style="width:100%;margin-top:8px" data-act="createEvent"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? '作っています…' : '作ってリンクを出す') + '</button></div></div>';
+    return h;
+  }
+
+  function eventFields(f) {
+    return '<div class="field"><label>イベントの名前</label><input data-in="f.name" maxlength="40" value="' + esc(f.name) + '" placeholder="例)忘年会の日程"></div>' +
+      '<div class="field"><label>説明(なくてもOK)</label><textarea data-in="f.description" maxlength="300">' + esc(f.description) + '</textarea></div>' +
+      '<div class="two"><div class="field"><label>場所(決まっていれば)</label><input data-in="f.place" value="' + esc(f.place) + '"></div>' +
+      '<div class="field"><label>お金の目安(決まっていれば)</label><input data-in="f.cost" value="' + esc(f.cost) + '" placeholder="例)3000〜4000円"></div></div>' +
+      '<div class="field"><label>リンク(お店のページなど)</label><input data-in="f.url" value="' + esc(f.url) + '" placeholder="https://"></div>' +
+      '<div class="two"><div class="field"><label>締め切り(なくてもOK)</label><input type="date" data-in="f.deadline" value="' + esc(f.deadline) + '"></div>' +
+      '<div class="field"><label>結果の見せ方</label><select data-in="f.visibility">' + [['名前', '名前も見せる'], ['人数', '人数だけ'], ['伊吹だけ', '見せない(自分だけ)']].map(function (v) {
+        return '<option value="' + v[0] + '"' + (f.visibility === v[0] ? ' selected' : '') + '>' + v[1] + '</option>'; }).join('') + '</select>' +
+      '<div class="hint">大人数のイベントは「人数だけ」がおすすめ</div></div></div>';
+  }
+
+  function calendar() {
+    var f = S.form, base = new Date(f.calY, f.calM, 1), today = ymd(new Date());
+    var picked = {};
+    f.cands.forEach(function (c) { picked[c.date] = true; });
+    var h = '<div class="cal"><div class="head"><button class="btn ghost sm" data-act="calPrev">‹</button><b>' + f.calY + '年' + (f.calM + 1) + '月</b><button class="btn ghost sm" data-act="calNext">›</button></div><table><tr>' +
+      WD.map(function (w, i) { return '<th class="' + (i === 0 ? 'sun' : i === 6 ? 'sat' : '') + '">' + w + '</th>'; }).join('') + '</tr><tr>';
+    for (var i = 0; i < base.getDay(); i++) h += '<td></td>';
+    var days = new Date(f.calY, f.calM + 1, 0).getDate();
+    for (var d = 1; d <= days; d++) {
+      var dt = new Date(f.calY, f.calM, d), s = ymd(dt), wd = dt.getDay();
+      if (wd === 0 && d !== 1) h += '</tr><tr>';
+      h += '<td><button class="d' + (picked[s] ? ' on' : '') + (s < today ? ' past' : '') + ' ' + (wd === 0 ? 'sun' : wd === 6 ? 'sat' : '') + '" data-act="pickDay" data-d="' + s + '"' + (s < today ? ' disabled' : '') + '>' + d + '</button></td>';
+    }
+    return h + '</tr></table></div>';
+  }
+
+  // ---- 結果 ----
+  function viewEvent() {
+    var r = S.res, ev = r.event, g = S.group.group;
+    var h = '<div class="top"><div class="grow"><div class="crumb"><button data-act="home">一覧</button> › <button data-act="backGroup">' + esc(g.name) + '</button> ›</div>' +
+      '<h1>' + esc(ev.name) + ' ' + badge(ev.status) + '</h1><div class="sub">' + (ev.deadline ? '締め切り ' + fmtDate(ev.deadline) + ' ・ ' : '') +
+      '結果の見せ方:' + esc(ev.visibility === '伊吹だけ' ? '見せない' : ev.visibility === '人数' ? '人数だけ' : '名前も見せる') + '</div></div>' +
+      '<button class="btn ghost" data-act="showLink" data-link="' + esc(ev.link) + '" data-title="' + esc(ev.name) + 'のリンク">リンク・QR</button>' +
+      '<button class="btn ghost" data-act="editEvent">変更</button></div>';
+    h += '<div class="cols"><div>';
+    // 出欠
+    if (r.attendance) {
+      var a = r.attendance;
+      var dec = ev.candidates.filter(function (c) { return c.id === ev.decidedId; })[0];
+      h += '<div class="card" style="margin-bottom:12px"><div class="row"><div class="grow"><div class="sub">決まった日</div><div class="date" style="font-size:20px">' + (dec ? fmtDate(dec.date) + (dec.time ? ' ' + esc(dec.time) : '') : '') + '</div></div>' +
+        (ev.status === '出欠確認中' ? '<button class="btn ghost sm" data-act="undecide">日程調整に戻す</button><button class="btn ghost sm" data-act="closeEvent">終了にする</button>' : '') + '</div>' +
+        '<div class="cnt" style="margin-top:8px"><span class="o">行く ' + a.totals.go + '</span><span class="t">途中から ' + a.totals.partial + '</span><span class="x">行かない ' + a.totals.no + '</span><span class="sub">未回答 ' + a.unanswered.length + '</span></div>' +
+        '<table class="grid2" style="margin-top:8px"><tr><th>名前</th><th>出欠</th><th>来られる時間</th><th>ひとこと</th></tr>' +
+        a.rows.map(function (x) {
+          return '<tr><td>' + esc(x.name) + '</td><td><select data-in="attSel" data-m="' + esc(x.memberId) + '">' + ['', '行く', '途中から', '行かない'].map(function (v) {
+            return '<option' + (x.status === v ? ' selected' : '') + ' value="' + v + '">' + (v || '—') + '</option>'; }).join('') + '</select></td><td>' + esc(x.arriveAt) + '</td><td style="text-align:left">' + esc(x.comment) + '</td></tr>';
+        }).join('') + '</table></div>';
+      h += '<details><summary class="sub" style="cursor:pointer;margin:6px 0">日程調整のときの結果</summary>';
+    }
+    if (S.group.group.kind === 'サークル') {
+      h += '<div class="row" style="margin-bottom:10px"><span class="sub">絞り込み</span>' +
+        '<select data-in="fGrade">' + ['', '1年', '2年', '3年', '4年'].map(function (v) { return '<option value="' + v + '"' + ((S.filter.grade || '') === v ? ' selected' : '') + '>' + (v || '全学年') + '</option>'; }).join('') + '</select>' +
+        '<select data-in="fGender">' + ['', '男性', '女性'].map(function (v) { return '<option value="' + v + '"' + ((S.filter.gender || '') === v ? ' selected' : '') + '>' + (v || '男女とも') + '</option>'; }).join('') + '</select>' +
+        '<span class="sub">回答 ' + r.answeredCount + ' / ' + r.memberCount + '人</span></div>';
+    } else h += '<div class="sub" style="margin-bottom:10px">回答 ' + r.answeredCount + '人</div>';
+    r.byDate.forEach(function (b) {
+      var total = Math.max(1, r.memberCount);
+      h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">いちばん多い日</div>' : '') +
+        '<div class="row"><div class="grow date">' + fmtDate(b.date) + (b.time ? ' <span class="sub">' + esc(b.time) + '</span>' : '') + (b.memo ? ' <span class="sub">' + esc(b.memo) + '</span>' : '') + '</div>' +
+        '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span>' +
+        (ev.status === '日程調整中' ? '<button class="btn green sm" data-act="decide" data-c="' + esc(b.candidateId) + '">この日に決める</button><button class="btn ghost sm" data-act="removeCand" data-c="' + esc(b.candidateId) + '" title="候補日を消す">✕</button>' : '') + '</div>' +
+        '<div class="bar"><i style="width:' + (b.o / total * 100) + '%;background:var(--o)"></i><i style="width:' + (b.t / total * 100) + '%;background:var(--t)"></i><i style="width:' + (b.x / total * 100) + '%;background:var(--x)"></i></div>' +
+        '<div class="names">' + [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
+          var list = b.names[m[1]]; return list.length ? '<div><span class="lab ' + m[1] + '">' + m[0] + '</span>' + list.map(esc).join('・') + '</div>' : ''; }).join('') + '</div>' +
+        (b.wanted ? '<div class="wanted">来てほしい人:' + (b.wanted.ok.length ? '<b style="color:var(--o)">○ ' + b.wanted.ok.map(esc).join('・') + '</b> ' : '') +
+          (b.wanted.maybe.length ? '<span style="color:var(--t-ink)">△ ' + b.wanted.maybe.map(esc).join('・') + '</span> ' : '') +
+          (b.wanted.ng.length ? '<span style="color:var(--danger)">× ' + b.wanted.ng.map(esc).join('・') + '</span> ' : '') +
+          (b.wanted.none.length ? '<span class="sub">未回答 ' + b.wanted.none.map(esc).join('・') + '</span>' : '') + '</div>' : '') + '</div>';
+    });
+    if (ev.status === '日程調整中') h += '<button class="btn ghost sm" data-act="addCand">候補日を足す</button>';
+    if (r.attendance) h += '</details>';
+    h += '</div><div>';
+    // 右側:未回答・催促・ひとこと・来てほしい人・代わりに入れる
+    var unN = r.attendance ? r.attendance.unanswered.length : r.unanswered.length;
+    h += '<div class="card"><b>まだ答えていない人(' + unN + '人)</b>' +
+      '<div style="margin:6px 0 8px;font-size:13px">' + (unN ? (r.attendance ? r.attendance.unanswered : r.unanswered.map(function (m) { return m.name; })).map(esc).join('・') : '全員答えています🎉') + '</div>' +
+      '<textarea class="remind" data-in="remind">' + esc(r.remindText) + '</textarea>' +
+      '<button class="btn sm" style="margin-top:6px" data-act="copyRemind">催促文をコピー</button></div>';
+    if (r.comments.length) h += '<h2>ひとこと</h2><div class="card">' + r.comments.map(function (c) { return '<div><b>' + esc(c.name) + '</b>:' + esc(c.comment) + '</div>'; }).join('') + '</div>';
+    h += '<h2>そのほか</h2><div class="card"><div class="row" style="margin-bottom:8px"><span class="grow">来てほしい人(' + r.wanted.length + '人)</span><button class="btn ghost sm" data-act="editWanted">選ぶ</button></div>' +
+      '<div class="row"><span class="grow">LINEなどで聞いた答えを代わりに入れる</span><button class="btn ghost sm" data-act="proxy">入れる</button></div></div>';
+    return h + '</div></div>';
+  }
+
+  // ---- モーダル ----
+  function viewModal() {
+    var m = S.modal;
+    if (m.type === 'link') {
+      return '<h2 style="margin-top:0">' + esc(m.title) + '</h2><div class="linkbox"><input readonly value="' + esc(m.link) + '"><button class="btn sm" data-act="copyLink">コピー</button></div>' +
+        '<div class="qr" style="margin-top:14px"><img src="' + qrImg(m.link) + '" alt="QRコード"><div class="sub">画面で見せて読み込んでもらう用</div></div>' +
+        '<div style="text-align:right;margin-top:10px"><button class="btn ghost" data-act="closeModal">閉じる</button></div>';
+    }
+    if (m.type === 'edit') {
+      return '<h2 style="margin-top:0">イベントを変更</h2>' + eventFields(S.form) +
+        '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveEdit">保存</button></div>';
+    }
+    if (m.type === 'wanted') {
+      return '<h2 style="margin-top:0">来てほしい人</h2><div class="sub">選んだ人が来られるかを、日ごとの結果に出します</div><div style="columns:2;margin-top:10px">' +
+        S.group.members.map(function (x) { return '<label style="display:block;padding:3px 0"><input type="checkbox" data-in="wantedChk" value="' + esc(x.memberId) + '"' + (m.sel[x.memberId] ? ' checked' : '') + '> ' + esc(x.name) + '</label>'; }).join('') +
+        '</div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveWanted">保存</button></div>';
+    }
+    if (m.type === 'proxy') {
+      var cands = S.res.event.candidates;
+      return '<h2 style="margin-top:0">代わりに入れる</h2><div class="sub">締め切り後でも入れられます。押すと切りかわり、「保存」でまとめて送ります</div>' +
+        '<table class="grid2" style="margin-top:10px"><tr><th>名前</th>' + cands.map(function (c) { return '<th>' + fmtDate(c.date) + '</th>'; }).join('') + '</tr>' +
+        S.res.answersByMember.map(function (x) {
+          return '<tr><td>' + esc(x.name) + '</td>' + cands.map(function (c) {
+            var v = (m.edit[x.memberId] || x.answers)[c.id] || '';
+            var cls = v === '○' ? 'o' : v === '△' ? 't' : v === '×' ? 'x' : '';
+            return '<td><button class="mk ' + cls + (v ? ' on' : '') + '" data-act="cycle" data-m="' + esc(x.memberId) + '" data-c="' + esc(c.id) + '">' + (v || '·') + '</button></td>';
+          }).join('') + '</tr>';
+        }).join('') + '</table><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveProxy">保存</button></div>';
+    }
+    if (m.type === 'addCand') {
+      return '<h2 style="margin-top:0">候補日を足す</h2>' + calendar() + '<div class="picked">' + S.form.cands.map(function (c, i) {
+        return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') + '</div>' +
+        '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveCands">足す</button></div>';
+    }
+    return '';
+  }
+
+  // ===== 操作 =====
+  function newForm(extra) {
+    var now = new Date();
+    return Object.assign({ name: '', description: '', place: '', cost: '', url: '', deadline: '', visibility: '名前', cands: [], defTime: '19:00',
+      calY: now.getFullYear(), calM: now.getMonth(), wd: 2, weeks: 4, kind: 'グループ', mascot: true }, extra || {});
+  }
+  function eventInput(f) {
+    return { name: f.name, description: f.description, place: f.place, cost: f.cost, url: f.url, deadline: f.deadline, visibility: f.visibility };
+  }
+  var ACTIONS = {
+    login: function () {
+      S.busy = true; S.err = ''; render();
+      google.script.run.withSuccessHandler(function (res) {
+        S.busy = false;
+        if (res.ok) { S.token = res.data.token; lsSet('sch.admin', S.token); loadHome(); } else { S.err = res.error.message; render(); }
+      }).withFailureHandler(function () { S.busy = false; S.err = '通信できませんでした'; render(); }).adminLogin(S.pw || '');
+    },
+    home: function () { loadHome(); },
+    newGroup: function () { S.form = newForm(); S.err = ''; S.view = 'newGroup'; render(); },
+    newOnce: function () { S.form = newForm({ once: true, mascot: false }); S.err = ''; S.view = 'newEvent'; render(); },
+    setKind: function (el) { S.form.kind = el.getAttribute('data-v'); render(); },
+    setMascot: function (el) { S.form.mascot = el.getAttribute('data-v') === '1'; render(); },
+    createGroup: function () {
+      if (!S.form.name.trim()) { S.err = '名前を入れてください'; render(); return; }
+      S.busy = true; render();
+      call('adminCreateGroup', [{ name: S.form.name, kind: S.form.kind, mascot: S.form.mascot }]).then(function (d) {
+        S.busy = false; toast('作りました'); S.modal = { type: 'link', link: d.link, title: S.form.name + 'のリンク' }; loadGroup(d.groupId);
+      }).catch(fail);
+    },
+    openGroup: function (el) { loadGroup(el.getAttribute('data-id')); },
+    backGroup: function () { loadGroup(S.group.group.id); },
+    openEvent: function (el) { S.filter = {}; loadEvent(el.getAttribute('data-g'), el.getAttribute('data-id')); },
+    newEvent: function () { S.form = newForm(); S.err = ''; S.view = 'newEvent'; render(); },
+    calPrev: function () { var f = S.form; f.calM--; if (f.calM < 0) { f.calM = 11; f.calY--; } render(); },
+    calNext: function () { var f = S.form; f.calM++; if (f.calM > 11) { f.calM = 0; f.calY++; } render(); },
+    pickDay: function (el) {
+      var d = el.getAttribute('data-d'), f = S.form;
+      var i = f.cands.map(function (c) { return c.date; }).indexOf(d);
+      if (i >= 0) f.cands.splice(i, 1); else f.cands.push({ date: d, time: f.defTime });
+      f.cands.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); render();
+    },
+    unpick: function (el) { S.form.cands.splice(+el.getAttribute('data-i'), 1); render(); },
+    applyTime: function () { S.form.cands.forEach(function (c) { c.time = S.form.defTime; }); render(); },
+    addWeekly: function () {
+      var f = S.form, start = new Date(), have = {};
+      f.cands.forEach(function (c) { have[c.date] = true; });
+      for (var i = 0; i < f.weeks * 7; i++) {
+        var d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        if (d.getDay() === +f.wd && !have[ymd(d)]) f.cands.push({ date: ymd(d), time: f.defTime });
+      }
+      f.cands.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); render();
+    },
+    createEvent: function () {
+      var f = S.form;
+      if (!f.name.trim()) { S.err = 'イベントの名前を入れてください'; render(); return; }
+      if (!f.cands.length) { S.err = '候補日を選んでください'; render(); return; }
+      S.busy = true; S.err = ''; render();
+      var gid = f.once ? '' : S.group.group.id;
+      call('adminCreateEvent', [gid, Object.assign(eventInput(f), { candidates: f.cands, mascot: f.mascot })]).then(function (d) {
+        S.busy = false; toast('作りました'); S.group = null;
+        S.modal = { type: 'link', link: d.link, title: f.name + 'のリンク' };
+        loadEvent(d.groupId, d.eventId);
+      }).catch(fail);
+    },
+    showLink: function (el) { S.modal = { type: 'link', link: el.getAttribute('data-link'), title: el.getAttribute('data-title') }; render(); },
+    copyLink: function () { copy(S.modal.link); },
+    closeModal: function () { S.modal = null; render(); },
+    copyRemind: function () { copy(S.remind != null ? S.remind : S.res.remindText); },
+    decide: function (el) {
+      if (!confirm('この日に決めて、出欠確認に切りかえますか?(○の人は「行く」、×の人は「行かない」が仮に入ります)')) return;
+      call('adminDecide', [S.group.group.id, S.res.event.id, el.getAttribute('data-c')]).then(function () { toast('決めました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    undecide: function () {
+      if (!confirm('日程調整に戻しますか?(出欠の答えは残ります)')) return;
+      call('adminUndecide', [S.group.group.id, S.res.event.id]).then(function () { loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    closeEvent: function () {
+      if (!confirm('終了にしますか?(参加者は答えを変えられなくなります)')) return;
+      call('adminCloseEvent', [S.group.group.id, S.res.event.id]).then(function () { loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    removeCand: function (el) {
+      if (!confirm('この候補日を消しますか?')) return;
+      call('adminRemoveCandidate', [S.group.group.id, S.res.event.id, el.getAttribute('data-c')]).then(function () { loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    addCand: function () { S.form = newForm(); S.modal = { type: 'addCand' }; render(); },
+    saveCands: function () {
+      if (!S.form.cands.length) { S.modal = null; render(); return; }
+      call('adminAddCandidates', [S.group.group.id, S.res.event.id, S.form.cands]).then(function () { S.modal = null; toast('足しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    editEvent: function () {
+      var e = S.res.event;
+      S.form = newForm({ name: e.name, description: e.description, place: e.place, cost: e.cost, url: e.url, deadline: e.deadline, visibility: e.visibility });
+      S.modal = { type: 'edit' }; render();
+    },
+    saveEdit: function () {
+      call('adminUpdateEvent', [S.group.group.id, S.res.event.id, eventInput(S.form)]).then(function () { S.modal = null; toast('保存しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    editWanted: function () { var sel = {}; S.res.wanted.forEach(function (id) { sel[id] = true; }); S.modal = { type: 'wanted', sel: sel }; render(); },
+    saveWanted: function () {
+      var ids = Object.keys(S.modal.sel).filter(function (k) { return S.modal.sel[k]; });
+      call('adminSetWanted', [S.group.group.id, S.res.event.id, ids]).then(function () { S.modal = null; loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    proxy: function () { S.modal = { type: 'proxy', edit: {} }; render(); },
+    cycle: function (el) {
+      var mid = el.getAttribute('data-m'), cid = el.getAttribute('data-c');
+      var base = S.res.answersByMember.filter(function (x) { return x.memberId === mid; })[0];
+      var e = S.modal.edit[mid] || (S.modal.edit[mid] = Object.assign({}, base.answers));
+      var order = ['', '○', '△', '×'];
+      e[cid] = order[(order.indexOf(e[cid] || '') + 1) % 4];
+      render();
+    },
+    saveProxy: function () {
+      var ids = Object.keys(S.modal.edit);
+      var gid = S.group.group.id, eid = S.res.event.id;
+      ids.reduce(function (p, mid) { return p.then(function () { return call('adminSetAnswer', [gid, eid, mid, S.modal.edit[mid], '']); }); }, Promise.resolve())
+        .then(function () { S.modal = null; toast('保存しました'); loadEvent(gid, eid, true); }).catch(fail);
+    },
+    groupMascot: function (el) {
+      var v = el.getAttribute('data-v') === '1';
+      call('adminUpdateGroup', [S.group.group.id, { mascot: v }]).then(function () { S.group.group.mascot = v; render(); }).catch(fail);
+    },
+    syncRoster: function () { call('adminSyncRoster', [S.group.group.id]).then(function (d) { toast(d.added + '人を足しました'); loadGroup(S.group.group.id); }).catch(fail); },
+    archiveGroup: function () {
+      if (!confirm('このグループを一覧からしまいますか?(ファイルは残ります)')) return;
+      call('adminArchiveGroup', [S.group.group.id]).then(function () { toast('しまいました'); loadHome(); }).catch(fail);
+    }
+  };
+  var INPUTS = {
+    pw: function (v) { S.pw = v; },
+    remind: function (v) { S.remind = v; },
+    fGrade: function (v) { S.filter.grade = v; loadEvent(S.group.group.id, S.res.event.id, true); },
+    fGender: function (v) { S.filter.gender = v; loadEvent(S.group.group.id, S.res.event.id, true); },
+    wantedChk: function (v, el) { S.modal.sel[el.value] = el.checked; },
+    attSel: function (v, el) {
+      if (!v) return;
+      call('adminSetAttendance', [S.group.group.id, S.res.event.id, el.getAttribute('data-m'), { status: v }]).then(function () { toast('保存しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    'c.time': function (v, el) { S.form.cands[+el.getAttribute('data-i')].time = v; }
+  };
+  ['name', 'description', 'place', 'cost', 'url', 'deadline', 'visibility', 'defTime', 'wd', 'weeks'].forEach(function (k) { INPUTS['f.' + k] = function (v) { S.form[k] = v; }; });
+  var CHANGE_ONLY = { fGrade: 1, fGender: 1, attSel: 1, wantedChk: 1 };
+
+  app.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (el && el.getAttribute('data-act') === 'closeModal' && e.target.closest('[data-stop]') && !e.target.closest('button')) return;
+    if (!el || el.disabled) return;
+    var fn = ACTIONS[el.getAttribute('data-act')];
+    if (fn) { e.preventDefault(); fn(el); }
+  });
+  app.addEventListener('input', function (e) {
+    var k = e.target.getAttribute('data-in');
+    if (k && INPUTS[k] && !CHANGE_ONLY[k]) INPUTS[k](e.target.value, e.target);
+  });
+  app.addEventListener('change', function (e) {
+    var k = e.target.getAttribute('data-in');
+    if (k && INPUTS[k] && (CHANGE_ONLY[k] || e.target.tagName === 'SELECT')) INPUTS[k](e.target.value, e.target);
+  });
+  app.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.getAttribute('data-in') === 'pw') ACTIONS.login(); });
+
+  if (S.token) loadHome(); else { S.view = 'login'; render(); }
+})();
+</script>
