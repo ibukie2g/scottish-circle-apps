@@ -281,6 +281,13 @@ describe('幹事・管理者', () => {
     expect(await db.as(orgA, `select * from public.groups`)).toEqual([]); // owner_id が残っていても
   });
 
+  test('持ち主が空のグループは、管理者だけが管理できる', async () => {
+    const g = await one(null, `insert into public.groups (name, kind) values ('引っ越し', 'circle') returning id, owner_id`);
+    expect(g.owner_id).toBeNull();
+    expect(await db.as(orgA, `select * from public.groups where id = $1`, [g.id])).toEqual([]);
+    expect((await db.as(admin, `select * from public.groups where id = $1`, [g.id])).length).toBe(1);
+  });
+
   test('グループを消すのは管理者だけ。owner_id を変えるのも管理者だけ', async () => {
     expect(await db.as(orgA, `delete from public.groups where id = $1 returning id`, [gA.id])).toEqual([]);
     expect(await fails(db.as(orgA, `update public.groups set owner_id = $2 where id = $1`, [gA.id, orgB.id]))).toMatch(/FORBIDDEN/);

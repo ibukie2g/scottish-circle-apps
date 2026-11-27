@@ -54,7 +54,7 @@ create table public.groups (
   name text not null check (char_length(name) between 1 and 40),
   kind text not null check (kind in ('circle', 'group', 'once')),
   token text not null unique default private.new_token() check (char_length(token) >= 20),
-  owner_id uuid not null default auth.uid() references auth.users (id),
+  owner_id uuid default auth.uid() references auth.users (id) on delete set null, -- 空 = 管理者だけが管理(引っ越し・試し用のデータ)
   mascot boolean not null default true,
   archived boolean not null default false,
   created_at timestamptz not null default now()
