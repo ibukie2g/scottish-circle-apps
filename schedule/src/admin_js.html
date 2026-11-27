@@ -140,7 +140,10 @@
     });
     h += '</div><div><h2 style="margin-top:0">メンバー(' + d.members.length + '人)</h2><div class="card" style="max-height:420px;overflow:auto">';
     d.members.forEach(function (m) { h += '<div style="padding:3px 0">' + esc(m.name) + (m.grade ? ' <span class="sub">' + esc(m.grade) + '</span>' : '') + '</div>'; });
-    h += '</div><h2>設定</h2><div class="card"><div class="row" style="margin-bottom:10px"><span class="grow">つなぼる</span><div class="seg">' +
+    h += '</div><h2>設定</h2><div class="card">' +
+      '<div class="field" style="margin-top:0"><label>グループの名前</label><div class="row"><input data-in="groupName" maxlength="30" value="' + esc(S.groupName != null ? S.groupName : g.name) + '" style="flex:1;padding:8px 10px;border:1.5px solid var(--line);border-radius:10px">' +
+      '<button class="btn sm" data-act="renameGroup">保存</button></div><div class="hint">参加者の画面にも、新しい名前で出ます。リンクは変わりません</div></div>' +
+      '<div class="row" style="margin-bottom:10px"><span class="grow">つなぼる</span><div class="seg">' +
       '<button class="' + (g.mascot ? 'on' : '') + '" data-act="groupMascot" data-v="1">出す</button><button class="' + (!g.mascot ? 'on' : '') + '" data-act="groupMascot" data-v="0">出さない</button></div></div>' +
       (g.kind === 'サークル' ? '<div class="row" style="margin-bottom:10px"><span class="grow">名簿の新しい人を足す</span><button class="btn ghost sm" data-act="syncRoster">読み直す</button></div>' : '') +
       '<div class="row"><span class="grow">一覧からしまう(ファイルは残る)</span><button class="btn danger sm" data-act="archiveGroup">しまう</button></div></div></div></div>';
@@ -323,7 +326,7 @@
         S.busy = false; toast('作りました'); S.modal = { type: 'link', link: d.link, title: S.form.name + 'のリンク' }; loadGroup(d.groupId);
       }).catch(fail);
     },
-    openGroup: function (el) { loadGroup(el.getAttribute('data-id')); },
+    openGroup: function (el) { S.groupName = null; loadGroup(el.getAttribute('data-id')); },
     backGroup: function () { loadGroup(S.group.group.id); },
     openEvent: function (el) { S.filter = {}; S.remind = null; S.candEdit = null; loadEvent(el.getAttribute('data-g'), el.getAttribute('data-id')); },
     refresh: function () { refresh(false); },
@@ -445,6 +448,13 @@
       var v = el.getAttribute('data-v') === '1';
       call('adminUpdateGroup', [S.group.group.id, { mascot: v }]).then(function () { S.group.group.mascot = v; render(); }).catch(fail);
     },
+    renameGroup: function () {
+      var name = (S.groupName != null ? S.groupName : S.group.group.name).trim();
+      if (!name) { toast('名前を入れてください'); return; }
+      call('adminUpdateGroup', [S.group.group.id, { name: name }]).then(function () {
+        S.group.group.name = name; S.groupName = null; toast('名前を変えました'); render();
+      }).catch(fail);
+    },
     syncRoster: function () { call('adminSyncRoster', [S.group.group.id]).then(function (d) { toast(d.added + '人を足しました'); loadGroup(S.group.group.id); }).catch(fail); },
     archiveGroup: function () {
       if (!confirm('このグループを一覧からしまいますか?(ファイルは残ります)')) return;
@@ -454,6 +464,7 @@
   var INPUTS = {
     pw: function (v) { S.pw = v; },
     remind: function (v) { S.remind = v; },
+    groupName: function (v) { S.groupName = v; },
     fGrade: function (v) { S.filter.grade = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     fGender: function (v) { S.filter.gender = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     wantedChk: function (v, el) { S.modal.sel[el.value] = el.checked; },

@@ -193,3 +193,12 @@ test('候補日をまとめて消す・イベントを削除する(11/27 追加)
   ok(g.adminDeleteEvent(token, once.groupId, once.eventId));
   assert.ok(!ok(g.adminListGroups(token)).groups.some(x => x.id === once.groupId));
 });
+
+test('グループの名前を変えられる(リンクはそのまま)', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '男子飲み会', kind: 'グループ' }));
+  const tk = made.link.split('g=')[1];
+  ok(g.adminUpdateGroup(token, made.groupId, { name: '男子会' }));
+  assert.equal(ok(g.openGroup(tk, '')).group.name, '男子会');
+  assert.equal(g.adminUpdateGroup(token, made.groupId, { name: '  ' }).error.code, 'INVALID');
+});
