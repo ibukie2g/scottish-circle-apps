@@ -1,0 +1,8 @@
+# 鍵は絶対にコミットしない(.env を作る前にここに入れておく)
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
