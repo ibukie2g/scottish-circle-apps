@@ -101,6 +101,7 @@
       var live = g.events.filter(function (e) { return !e.archived; });
       h += '<div class="card"><div class="row"><div class="grow"><b style="font-size:16px">' + esc(g.name) + '</b> <span class="badge">' + esc(g.kind) + '</span>' +
         '<div class="sub">メンバー ' + g.memberCount + '人 ・ イベント ' + live.length + '</div></div>' +
+        '<button class="btn ghost sm" data-act="renameFromList" data-id="' + esc(g.id) + '" data-name="' + esc(g.name) + '">名前を変える</button>' +
         '<button class="btn ghost sm" data-act="openGroup" data-id="' + esc(g.id) + '">開く</button></div>';
       live.slice(0, 4).forEach(function (e) {
         h += '<button class="evline" data-act="openEvent" data-g="' + esc(g.id) + '" data-id="' + esc(e.id) + '"><span class="grow">' + esc(e.name) + '</span>' +
@@ -289,6 +290,12 @@
           }).join('') + '</tr>';
         }).join('') + '</table><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveProxy">保存</button></div>';
     }
+    if (m.type === 'rename') {
+      return '<h2 style="margin-top:0">グループの名前を変える</h2>' +
+        '<div class="field"><input data-in="renameVal" maxlength="30" value="' + esc(m.value) + '"></div>' +
+        '<div class="hint">参加者の画面にも新しい名前で出ます。リンクは変わりません</div>' +
+        '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveRename">保存</button></div>';
+    }
     if (m.type === 'addCand') {
       return '<h2 style="margin-top:0">候補日を足す</h2>' + calendar() + '<div class="picked">' + S.form.cands.map(function (c, i) {
         return '<span class="pick">' + fmtDate(c.date) + '<input type="time" data-in="c.time" data-i="' + i + '" value="' + esc(c.time) + '"><button data-act="dupDay" data-i="' + i + '" title="この日に別の時間を足す">＋時間</button><button data-act="unpick" data-i="' + i + '">✕</button></span>'; }).join('') + '</div>' +
@@ -448,6 +455,12 @@
       var v = el.getAttribute('data-v') === '1';
       call('adminUpdateGroup', [S.group.group.id, { mascot: v }]).then(function () { S.group.group.mascot = v; render(); }).catch(fail);
     },
+    renameFromList: function (el) { S.modal = { type: 'rename', id: el.getAttribute('data-id'), value: el.getAttribute('data-name') }; render(); },
+    saveRename: function () {
+      var m = S.modal, name = String(m.value || '').trim();
+      if (!name) { toast('名前を入れてください'); return; }
+      call('adminUpdateGroup', [m.id, { name: name }]).then(function () { S.modal = null; toast('名前を変えました'); loadHome(true); }).catch(fail);
+    },
     renameGroup: function () {
       var name = (S.groupName != null ? S.groupName : S.group.group.name).trim();
       if (!name) { toast('名前を入れてください'); return; }
@@ -465,6 +478,7 @@
     pw: function (v) { S.pw = v; },
     remind: function (v) { S.remind = v; },
     groupName: function (v) { S.groupName = v; },
+    renameVal: function (v) { S.modal.value = v; },
     fGrade: function (v) { S.filter.grade = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     fGender: function (v) { S.filter.gender = v; loadEvent(S.group.group.id, S.res.event.id, true); },
     wantedChk: function (v, el) { S.modal.sel[el.value] = el.checked; },
