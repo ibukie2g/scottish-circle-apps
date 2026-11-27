@@ -201,38 +201,6 @@ export function presetAttendance(mark: Mark | undefined): AttendanceStatus | nul
   return mark === 'o' ? 'go' : mark === 'x' ? 'no' : null;
 }
 
-// ---------- 文 ----------
-
-/** LINEに貼る催促文 */
-export function remindText(event: Pick<EventInfo, 'name' | 'deadline'>, names: readonly string[], link?: string): string {
-  const lines = [`【${event.name}】まだの人お願いします🙏`];
-  if (names.length) lines.push(names.map((n) => `${n}さん`).join('、'));
-  if (event.deadline) lines.push(`締め切り ${formatDateJa(event.deadline)}`);
-  if (link) lines.push(link);
-  return lines.join('\n');
-}
-
-/**
- * LINEに流す文(名指しはしない。11/27 伊吹)
- * decided があれば「決まりました」。時間調整中なら「日にちが決まった、何時から?」
- */
-export function shareText(event: Pick<EventInfo, 'name' | 'status' | 'deadline' | 'place'>, decided: { date: string; time?: string } | null, link?: string): string {
-  const lines: string[] = [];
-  if (decided && event.status === 'time') {
-    lines.push(`【${event.name}】${formatDateJa(decided.date)} に決まりました!`);
-    lines.push('何時からがいいか、ここから教えてください🙌');
-  } else if (decided) {
-    lines.push(`【${event.name}】${formatDateJa(decided.date)}${decided.time ? ' ' + decided.time : ''} に決まりました!`);
-    lines.push('行けるかどうか、ここから教えてください🙌');
-  } else {
-    lines.push(`【${event.name}】来られる日を教えてください🙌`);
-    if (event.deadline) lines.push(`締め切り ${formatDateJa(event.deadline)}`);
-  }
-  if (event.place) lines.push(`📍 ${event.place}`);
-  if (link) lines.push(link);
-  return lines.join('\n');
-}
-
 // ---------- 締め切り・しまう ----------
 
 /** 締め切りを過ぎたか(締め切りの日の 23:59 までOK)。nowYmd は日本時間の今日 */

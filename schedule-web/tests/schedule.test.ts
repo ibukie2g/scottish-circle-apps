@@ -129,20 +129,6 @@ test('出欠の集計と仮入れ', () => {
   expect(C.presetAttendance(undefined)).toBeNull();
 });
 
-test('催促文', () => {
-  expect(C.remindText({ name: '忘年会の日程', deadline: '2026-12-05' }, ['青木', '石井'], 'https://example.com/x'))
-    .toBe('【忘年会の日程】まだの人お願いします🙏\n青木さん、石井さん\n締め切り 12/5(土)\nhttps://example.com/x');
-});
-
-test('LINEに流す文(名指しなし)', () => {
-  expect(C.shareText({ name: '忘年会', status: 'poll', deadline: '2026-12-05', place: '駅前' }, null, 'https://x'))
-    .toBe('【忘年会】来られる日を教えてください🙌\n締め切り 12/5(土)\n📍 駅前\nhttps://x');
-  expect(C.shareText({ name: '忘年会', status: 'rsvp' }, { date: '2026-12-22', time: '19:00' }, 'https://x'))
-    .toBe('【忘年会】12/22(火) 19:00 に決まりました!\n行けるかどうか、ここから教えてください🙌\nhttps://x');
-  expect(C.shareText({ name: '忘年会', status: 'time' }, { date: '2026-12-22', time: '' }, 'https://x'))
-    .toBe('【忘年会】12/22(火) に決まりました!\n何時からがいいか、ここから教えてください🙌\nhttps://x');
-});
-
 test('締め切りと、終わったものをしまう判定', () => {
   const ev = { status: 'poll' as const, deadline: '2026-12-05' };
   expect(C.isClosed(ev, '2026-12-05')).toBe(false);
