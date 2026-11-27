@@ -80,6 +80,19 @@ describe('集計', () => {
   });
 });
 
+test('サーバーの人数を並べる(rankResults):summarize と同じ順番と印', () => {
+  const s = C.summarize(cands, answers, members);
+  const fromServer = s.byDate.map(({ candidateId, date, time, o, t, x }) => ({ candidateId, date, time, o, t, x })).reverse();
+  expect(C.rankResults(fromServer).map((r) => [r.candidateId, r.best])).toEqual(s.byDate.map((d) => [d.candidateId, d.best]));
+  const tie = [
+    { id: 'b', date: '2026-12-18', time: '19:00', o: 2, t: 1, x: 0 },
+    { id: 'a', date: '2026-12-15', time: '19:00', o: 2, t: 1, x: 0 },
+    { id: 'c', date: '2026-12-10', time: '', o: 0, t: 0, x: 3 },
+  ];
+  expect(C.rankResults(tie).map((r) => [r.id, r.best])).toEqual([['a', true], ['b', true], ['c', false]]);
+  expect(C.rankResults([{ date: '2026-12-01', time: '', o: 0, t: 2 }])[0]!.best).toBe(false);
+});
+
 test('未回答と絞り込み', () => {
   expect(C.unanswered(members, answers, ['C01', 'C02', 'C03']).map((m) => m.id)).toEqual(['M004']);
   expect(C.filterMembers(members, { grade: '1年' }).map((m) => m.id)).toEqual(['M001', 'M003']);

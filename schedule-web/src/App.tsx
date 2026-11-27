@@ -1,9 +1,20 @@
-// まだ土台だけ。Supabase につなぐのは、伊吹がプロジェクトを作ってから(12/6 以降)
+// 参加者の画面。URL:/g/:token(グループ)・/g/:token/e/:eventId(イベント)・/(参加中のイベント)
+import { configured } from './lib/supabase';
+import { EventPage } from './pages/EventPage';
+import { GroupPage, HomePage } from './pages/GroupPage';
+import { ErrorView, Toast, useRoute } from './ui';
+
 export function App() {
+  const route = useRoute();
+  let page;
+  if (!configured) page = <ErrorView message="設定(Supabase の URL とキー)が入っていません" />;
+  else if (route.page === 'event') page = <EventPage key={route.token + route.eventId} token={route.token} eventId={route.eventId} />;
+  else if (route.page === 'group') page = <GroupPage key={route.token} token={route.token} />;
+  else page = <HomePage />;
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
-      <h1>日程調整(B案・準備中)</h1>
-      <p>いまは計算の部品とテストだけです。</p>
-    </main>
+    <div className="app">
+      {page}
+      <Toast />
+    </div>
   );
 }

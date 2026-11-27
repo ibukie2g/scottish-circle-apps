@@ -183,6 +183,17 @@ export function summarize(
   return { byDate: list.map((x) => x.item), answeredCount: markOf.size, memberCount: active.length };
 }
 
+/**
+ * サーバー(get_event)が返す候補ごとの人数を並べ、いちばん多いものに印をつける
+ * summarize と同じ決まり:○ → △ の多い順、同じなら日付・時刻の早い順。○も△も1位と同じなら全部に印(○が0なら付けない)
+ */
+export function rankResults<T extends { o: number; t: number; date: string; time: string }>(list: readonly T[]): (T & { best: boolean })[] {
+  const sorted = sortCandidates(list).map((it, order) => ({ it, order }));
+  sorted.sort((a, b) => b.it.o - a.it.o || b.it.t - a.it.t || a.order - b.order);
+  const top = sorted[0]?.it;
+  return sorted.map(({ it }) => ({ ...it, best: !!top && top.o > 0 && it.o === top.o && it.t === top.t }));
+}
+
 /** 出欠の集計。名前は「途中から」の人だけ (20:30〜) をつける */
 export function summarizeAttendance(rows: readonly Attendance[], members: readonly Member[], withNames = true) {
   const nameOf = new Map(members.filter(isActive).map((m) => [m.id, m.name]));
