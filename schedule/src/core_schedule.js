@@ -156,7 +156,9 @@ function summarize(candidates, answerRows, members, opts) {
     return item;
   });
   list.sort(function (a, b) { return (b.o - a.o) || (b.t - a.t) || (a.order - b.order); });
-  list.forEach(function (it, i) { it.best = i === 0 && it.o > 0; delete it.order; });
+  // ○も△も先頭と同じ数なら、同点としてすべてに「いちばん多い」をつける(11/27 伊吹)
+  var top = list[0];
+  list.forEach(function (it) { it.best = !!top && top.o > 0 && it.o === top.o && it.t === top.t; delete it.order; });
   return { byDate: list, answeredCount: answeredCount, memberCount: active.length };
 }
 

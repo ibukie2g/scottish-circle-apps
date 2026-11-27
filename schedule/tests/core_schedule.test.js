@@ -129,3 +129,18 @@ test('カレンダー:時刻あり(日本時間→UTC)と終日', () => {
   assert.match(b.ics, /DTSTART;VALUE=DATE:20261231\r\nDTEND;VALUE=DATE:20270101/);
   assert.equal(C.calendarData({ title: 'x', date: 'bad' }), null);
 });
+
+test('同点(○も△も同じ数)なら、すべてに「いちばん多い」の印がつく', () => {
+  const r = [
+    { memberId: 'M001', answers: 'C01:○,C02:○,C03:○' },
+    { memberId: 'M002', answers: 'C01:△,C02:△,C03:○' }
+  ];
+  const s = C.summarize(cands, r, members, {});
+  assert.deepEqual(s.byDate.map(d => [d.candidateId, d.best]), [['C03', true], ['C01', false], ['C02', false]]);
+  const r2 = [
+    { memberId: 'M001', answers: 'C01:○,C02:○,C03:×' },
+    { memberId: 'M002', answers: 'C01:△,C02:△,C03:○' }
+  ];
+  const s2 = C.summarize(cands, r2, members, {});
+  assert.deepEqual(s2.byDate.map(d => [d.candidateId, d.best]), [['C01', true], ['C02', true], ['C03', false]]);
+});
