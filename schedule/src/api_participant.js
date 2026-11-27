@@ -31,7 +31,8 @@ function openGroup(token, memberId) {
       return ka - kb;
     });
     return {
-      group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot },
+      // memberCount:名前を選ぶ画面で「前にこのグループに入ったことがある」を、名前の一覧を待たずにすぐ出すため
+      group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot, memberCount: members.filter(function (m) { return m.active; }).length },
       me: me ? { memberId: me.memberId, name: me.name } : null,
       events: events
     };

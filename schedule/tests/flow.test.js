@@ -312,6 +312,7 @@ test('二重登録:空白のあるなしだけちがう名前は止める。運�
   assert.deepEqual(grp.members.map(m => m.memberId), [a.memberId]);
   assert.deepEqual(grp.removed.map(m => m.memberId), [b.memberId]);
   assert.equal(ok(g.listMembers(tk)).members.length, 1, '名前を選ぶ画面にも出ない');
+  assert.equal(ok(g.openGroup(tk, '')).group.memberCount, 1, '最初の読み込みで人数が分かる(ボタンを先に出す用)');
   assert.equal(ok(g.adminGetResults(token, gid, ev.eventId)).byDate[0].o, 1, '消した人の答えは集計に出ない');
   assert.equal(ok(g.openGroup(tk, b.memberId)).me, null, '消された人のスマホは、名前を選び直しになる');
 

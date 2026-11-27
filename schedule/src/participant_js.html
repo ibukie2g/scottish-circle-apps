@@ -161,13 +161,18 @@
     h += '<div class="field"><input data-in="joinName" maxlength="20" placeholder="例)会津 太郎" value="' + esc(nm) + '"></div>';
     if (S.joinErr) h += '<div class="err">' + esc(S.joinErr) + '</div>';
     h += '<button class="btn" data-act="joinSimple"' + (S.sending ? ' disabled' : '') + '>この名前で参加する</button>';
-    if (S.members && S.members.length) {
-      // 前に入った人用:小さくて見つけにくかったので、区切りをつけて大きなボタンにした(11/27 伊吹)
-      h += '<div class="or"><span>または</span></div><details class="returning"><summary class="btn ghost">前にこのグループに入ったことがある<small>自分の名前を一覧から選ぶ</small></summary>';
-      S.members.forEach(function (m) {
-        h += '<button class="card member" data-act="pickMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '"><b>' + esc(m.name) + '</b></button>';
-      });
-      h += '</details>';
+    // 前に入った人用:小さくて見つけにくかったので、区切りをつけて大きなボタンにした(11/27 伊吹)
+    // 人数は最初の読み込み(openGroup)で分かるので、名前の一覧を待たずにボタンだけ先に出す(画面がずれて出ないように)
+    var count = S.members ? S.members.length : (g.memberCount || 0);
+    if (count) {
+      h += '<div class="or"><span>または</span></div><div class="returning"><button class="btn ghost' + (S.showReturning ? ' open' : '') + '" data-act="toggleReturning">前にこのグループに入ったことがある<small>自分の名前を一覧から選ぶ</small></button>';
+      if (S.showReturning) {
+        if (!S.members) h += '<div class="loading">読み込み中…</div>';
+        else S.members.forEach(function (m) {
+          h += '<button class="card member" data-act="pickMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '"><b>' + esc(m.name) + '</b></button>';
+        });
+      }
+      h += '</div>';
     }
     return h;
   }
@@ -359,6 +364,7 @@
       S.view = 'loading'; render(); loadGroup(true);
     },
     toJoin: function () { S.view = 'join'; S.joinErr = ''; S.join = S.join || {}; render(); },
+    toggleReturning: function () { S.showReturning = !S.showReturning; render(); },
     toPick: function () { S.view = 'pick'; S.joinErr = ''; render(); },
     joinSimple: function () {
       var name = (S.joinName != null ? S.joinName : lsGet('sch.name', '')).trim();
