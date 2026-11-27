@@ -209,6 +209,7 @@
     var badge;
     if (e.status === '終了') badge = '<span class="badge">終わり</span>';
     else if (e.status === '出欠確認中') badge = e.myAnswered ? '<span class="badge done">出欠OK</span>' : '<span class="badge todo">出欠を答えてね</span>';
+    else if (e.status === '時間調整中') badge = e.myAnswered ? '<span class="badge done">答えた</span>' : '<span class="badge todo">時間を答えてね</span>';
     else if (e.closed) badge = '<span class="badge">締め切り</span>';
     else badge = e.myAnswered ? '<span class="badge done">答えた</span>' : '<span class="badge todo">まだ</span>';
     var sub = e.decided ? '決定:' + fmtDate(e.decided.date) + (e.decided.time ? ' ' + esc(e.decided.time) : '')
@@ -226,7 +227,9 @@
     var ev = d.event;
     var answered = Object.keys(d.mine.answers || {}).length > 0;
     var msg, face = 'tsunaboru_normal';
+    var isTime = ev.status === '時間調整中';
     if (ev.status === '出欠確認中') { msg = '日にちが決まったよ!'; face = 'tsunaboru_excited'; }
+    else if (isTime) { msg = answered ? '答えてくれてありがとう!' : '日にちが決まったよ!何時からがいい?'; face = answered ? 'tsunaboru_joy' : 'tsunaboru_excited'; }
     else if (ev.status === '終了') msg = 'このイベントは終わったよ';
     else if (ev.closed) msg = '締め切りを過ぎたよ';
     else if (answered) { msg = '答えてくれてありがとう!'; face = 'tsunaboru_joy'; }
@@ -235,9 +238,13 @@
     h += '<h1>' + esc(ev.name) + '</h1>';
     var meta = [];
     if (ev.deadline && ev.status === '日程調整中') meta.push('締め切り <b>' + fmtDate(ev.deadline) + '</b>');
-    if (d.results && ev.status === '日程調整中') meta.push('回答 ' + d.results.answeredCount + '人');
+    if (d.results && (ev.status === '日程調整中' || isTime)) meta.push('回答 ' + d.results.answeredCount + '人');
     if (meta.length) h += '<div class="meta">' + meta.join(' ・ ') + '</div>';
     h += detailBox(ev);
+    if (isTime && ev.decided) {
+      h += '<div class="decided"><div class="muted">決まった日</div><div class="big">' + fmtDate(ev.decided.date) + '</div>' +
+        '<div class="muted" style="margin-top:4px">何時からなら来られる?それぞれに ○△× をつけてね</div></div>';
+    }
     if (ev.status === '出欠確認中' || (ev.status === '終了' && ev.decided)) h += rsvpPart(d);
     else h += pollPart(d);
     h += resultsPart(d);
@@ -258,9 +265,14 @@
     var closed = d.event.closed || d.event.status === '終了';
     var h = '';
     if (!closed) h += '<div class="quick"><button class="chip" data-act="fillAll" data-v="○">全部○</button><button class="chip" data-act="fillAll" data-v="×">全部×</button></div>';
+    var isTime = d.event.status === '時間調整中';
+    // 日程を聞いている間の時刻は「目安」(日にちが決まってから、時間をあらためて聞けるので)
+    if (!isTime && d.candidates.some(function (c) { return c.time; })) h += '<div class="muted" style="margin:0 2px 6px">時間は目安です。日にちが決まってから、時間をあらためて聞くこともあります</div>';
     d.candidates.forEach(function (c) {
       var cur = S.draft[c.id] || '';
-      h += '<div class="card row"><div class="date grow">' + fmtDate(c.date) + '<small>' + esc(c.time ? c.time + '〜' : '時間未定') + (c.memo ? ' ・ ' + esc(c.memo) : '') + '</small></div><div class="opts">' +
+      var label = isTime ? esc(c.time) + '〜' + (c.memo ? '<small>' + esc(c.memo) + '</small>' : '')
+        : fmtDate(c.date) + '<small>' + esc(c.time ? c.time + '〜(目安)' : '時間未定') + (c.memo ? ' ・ ' + esc(c.memo) : '') + '</small>';
+      h += '<div class="card row"><div class="date grow">' + label + '</div><div class="opts">' +
         [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
           return '<button class="opt ' + m[1] + (cur === m[0] ? ' on' : '') + '" data-act="mark" data-id="' + esc(c.id) + '" data-v="' + m[0] + '"' + (closed ? ' disabled' : '') + '>' + m[0] + '</button>';
         }).join('') + '</div></div>';
@@ -270,7 +282,7 @@
     var filled = d.candidates.filter(function (c) { return S.draft[c.id]; }).length;
     h += '<div class="sendas"><b>' + esc(S.me.name) + '</b> さんとして送ります</div>';
     h += '<button class="btn" data-act="sendAnswers"' + (S.sending || !filled ? ' disabled' : '') + '>' + (S.sending ? '送っています…' : (Object.keys(d.mine.answers || {}).length ? '答えを直して送る' : '送る')) + '</button>';
-    if (filled && filled < d.candidates.length) h += '<div class="muted center" style="margin-top:6px">まだ選んでいない日があります(そのままでも送れます)</div>';
+    if (filled && filled < d.candidates.length) h += '<div class="muted center" style="margin-top:6px">まだ選んでいない' + (isTime ? '時間' : '日') + 'があります(そのままでも送れます)</div>';
     return h;
   }
 
@@ -305,20 +317,22 @@
       h += '<div class="card"><div class="row"><b class="grow">出欠</b><span class="cnt"><span class="o">行く ' + a.go + '</span><span class="t">途中から ' + a.partial + '</span><span class="x">行かない ' + a.no + '</span></span></div>';
       if (a.names) h += namesLines([['行', 'o', a.names.go], ['途', 't', a.names.partial], ['×', 'x', a.names.no]]);
       h += '</div>';
-      if (ev.status !== '日程調整中') h += '<details><summary>日程調整のときの回答</summary>' + dateCards(r, ev) + '</details>';
+      if (ev.status !== '日程調整中') h += '<details><summary>日程調整のときの回答</summary>' + dateCards(r.dateStage || r, false) + '</details>';
       return h;
     }
-    if (!r.answeredCount) return h + '<div class="note">まだだれも答えていません。最初の1人になろう!</div>';
-    return h + dateCards(r, ev);
+    var isTime = ev.status === '時間調整中';
+    var past = isTime && r.dateStage ? '<details><summary>日程調整のときの回答</summary>' + dateCards(r.dateStage, false) + '</details>' : '';
+    if (!r.answeredCount) return h + '<div class="note">まだだれも答えていません。最初の1人になろう!</div>' + past;
+    return h + dateCards(r, isTime) + past;
   }
 
-  function dateCards(r, ev) {
+  /** timeOnly=true なら時刻を大きく出す(時間の候補) */
+  function dateCards(r, timeOnly) {
     var h = '';
-    var cmap = {};
-    S.ev.candidates.forEach(function (c) { cmap[c.id] = c; });
     r.byDate.forEach(function (b) {
-      h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">いちばん多い日</div>' : '') +
-        '<div class="row"><b class="grow" style="font-size:16px">' + fmtDate(b.date) + (b.time ? ' <span class="muted">' + esc(b.time) + '</span>' : '') + '</b>' +
+      var head = timeOnly ? esc(b.time) + '〜' : fmtDate(b.date) + (b.time ? ' <span class="muted">' + esc(b.time) + '</span>' : '');
+      h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">' + (timeOnly ? 'いちばん多い時間' : 'いちばん多い日') + '</div>' : '') +
+        '<div class="row"><b class="grow" style="font-size:16px">' + head + '</b>' +
         '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span></div>';
       if (b.names) h += namesLines([['○', 'o', b.names.o], ['△', 't', b.names.t], ['×', 'x', b.names.x]]);
       h += '</div>';

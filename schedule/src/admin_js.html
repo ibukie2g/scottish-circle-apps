@@ -89,7 +89,7 @@
   }
 
   function badge(st) {
-    return st === '日程調整中' ? '<span class="badge poll">日程調整中</span>' : st === '出欠確認中' ? '<span class="badge rsvp">出欠確認中</span>' : '<span class="badge">終了</span>';
+    return st === '日程調整中' ? '<span class="badge poll">日程調整中</span>' : st === '時間調整中' ? '<span class="badge poll">時間調整中</span>' : st === '出欠確認中' ? '<span class="badge rsvp">出欠確認中</span>' : '<span class="badge">終了</span>';
   }
 
   function viewHome() {
@@ -137,7 +137,7 @@
     if (!d.events.length) h += '<div class="card">まだイベントがありません。</div>';
     d.events.slice().reverse().forEach(function (e) {
       h += '<button class="card evline" style="margin-bottom:8px" data-act="openEvent" data-g="' + esc(g.id) + '" data-id="' + esc(e.id) + '"><span class="grow"><b>' + esc(e.name) + '</b>' +
-        '<div class="sub">候補 ' + e.candidates.length + '日' + (e.deadline ? ' ・ 締め切り ' + fmtDate(e.deadline) : '') + '</div></span>' + badge(e.status) + '</button>';
+        '<div class="sub">候補 ' + e.candidates.filter(function (c) { return c.stage !== 'time'; }).length + '日' + (e.deadline ? ' ・ 締め切り ' + fmtDate(e.deadline) : '') + '</div></span>' + badge(e.status) + '</button>';
     });
     h += '</div><div><h2 style="margin-top:0">メンバー(' + d.members.length + '人)</h2><div class="card" style="max-height:420px;overflow:auto">';
     d.members.forEach(function (m) { h += '<div style="padding:3px 0">' + esc(m.name) + (m.grade ? ' <span class="sub">' + esc(m.grade) + '</span>' : '') + '</div>'; });
@@ -211,8 +211,9 @@
     if (r.attendance) {
       var a = r.attendance;
       var dec = ev.candidates.filter(function (c) { return c.id === ev.decidedId; })[0];
+      var timeDecided = dec && dec.stage === 'time';
       h += '<div class="card" style="margin-bottom:12px"><div class="row"><div class="grow"><div class="sub">決まった日</div><div class="date" style="font-size:20px">' + (dec ? fmtDate(dec.date) + (dec.time ? ' ' + esc(dec.time) : '') : '') + '</div></div>' +
-        (ev.status === '出欠確認中' ? '<button class="btn ghost sm" data-act="undecide">日程調整に戻す</button><button class="btn ghost sm" data-act="closeEvent">終了にする</button>' : '') + '</div>' +
+        (ev.status === '出欠確認中' ? '<button class="btn ghost sm" data-act="undecide">' + (timeDecided ? '時間の調整に戻す' : '日程調整に戻す') + '</button><button class="btn ghost sm" data-act="closeEvent">終了にする</button>' : '') + '</div>' +
         '<div class="cnt" style="margin-top:8px"><span class="o">行く ' + a.totals.go + '</span><span class="t">途中から ' + a.totals.partial + '</span><span class="x">行かない ' + a.totals.no + '</span></div>' +
         '<table class="grid2" style="margin-top:8px"><tr><th>名前</th><th>出欠</th><th>来られる時間</th><th>ひとこと</th></tr>' +
         a.rows.map(function (x) {
@@ -220,7 +221,17 @@
           return '<tr><td>' + esc(x.name) + '</td><td><select data-in="attSel" data-m="' + esc(x.memberId) + '">' + ['', '行く', '途中から', '行かない'].map(function (v) {
             return '<option' + (x.status === v ? ' selected' : '') + ' value="' + v + '">' + (v || '—') + '</option>'; }).join('') + '</select></td><td>' + esc(x.arriveAt) + '</td><td style="text-align:left">' + esc(x.comment) + '</td></tr>';
         }).join('') + '</table></div>';
+      if (r.dateStage && r.dateStage.timeStage) {
+        h += '<details><summary class="sub" style="cursor:pointer;margin:6px 0">時間の調整のときの結果</summary>' +
+          r.dateStage.timeStage.byDate.map(function (b) { return resCard(b, r.memberCount, '', true); }).join('') + '</details>';
+      }
       h += '<details><summary class="sub" style="cursor:pointer;margin:6px 0">日程調整のときの結果</summary>';
+    }
+    var isTime = ev.status === '時間調整中';
+    if (isTime) {
+      var dd = ev.candidates.filter(function (c) { return c.id === ev.decidedId; })[0];
+      h += '<div class="card" style="margin-bottom:12px"><div class="row"><div class="grow"><div class="sub">決まった日(いま時間を聞いています)</div><div class="date" style="font-size:20px">' + (dd ? fmtDate(dd.date) : '') + '</div></div>' +
+        '<button class="btn ghost sm" data-act="undecide">日程調整に戻す</button></div></div>';
     }
     if (S.group.group.kind === 'サークル') {
       h += '<div class="row" style="margin-bottom:10px"><span class="sub">絞り込み</span>' +
@@ -229,27 +240,24 @@
         '<span class="sub">回答 ' + r.answeredCount + '人</span></div>';
     } else h += '<div class="sub" style="margin-bottom:10px">回答 ' + r.answeredCount + '人</div>';
     r.byDate.forEach(function (b) {
-      var total = Math.max(1, r.memberCount);
-      h += '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">いちばん多い日</div>' : '') +
-        '<div class="row"><div class="grow date">' + fmtDate(b.date) + (b.time ? ' <span class="sub">' + esc(b.time) + '</span>' : '') + (b.memo ? ' <span class="sub">' + esc(b.memo) + '</span>' : '') + '</div>' +
-        '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span>' +
-        (S.candEdit ? '<label class="btn ghost sm"><input type="checkbox" data-in="candChk" value="' + esc(b.candidateId) + '"' + (S.candEdit[b.candidateId] ? ' checked' : '') + '> 消す</label>'
-          : ev.status === '日程調整中' ? '<button class="btn green sm" data-act="decide" data-c="' + esc(b.candidateId) + '">この日に決める</button>' : '') + '</div>' +
-        '<div class="bar"><i style="width:' + (b.o / total * 100) + '%;background:var(--o)"></i><i style="width:' + (b.t / total * 100) + '%;background:var(--t)"></i><i style="width:' + (b.x / total * 100) + '%;background:var(--x)"></i></div>' +
-        '<div class="names">' + [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
-          var list = b.names[m[1]]; return list.length ? '<div><span class="lab ' + m[1] + '">' + m[0] + '</span>' + list.map(esc).join('・') + '</div>' : ''; }).join('') + '</div>' +
-        (b.wanted ? '<div class="wanted">来てほしい人:' + (b.wanted.ok.length ? '<b style="color:var(--o)">○ ' + b.wanted.ok.map(esc).join('・') + '</b> ' : '') +
-          (b.wanted.maybe.length ? '<span style="color:var(--t-ink)">△ ' + b.wanted.maybe.map(esc).join('・') + '</span> ' : '') +
-          (b.wanted.ng.length ? '<span style="color:var(--danger)">× ' + b.wanted.ng.map(esc).join('・') + '</span> ' : '') +
-          (b.wanted.none.length ? '<span class="sub">未回答 ' + b.wanted.none.map(esc).join('・') + '</span>' : '') + '</div>' : '') + '</div>';
+      var act = S.candEdit ? '<label class="btn ghost sm"><input type="checkbox" data-in="candChk" value="' + esc(b.candidateId) + '"' + (S.candEdit[b.candidateId] ? ' checked' : '') + '> 消す</label>'
+        : ev.status === '日程調整中' ? '<button class="btn green sm" data-act="decide" data-c="' + esc(b.candidateId) + '">この日に決める</button>'
+        : isTime ? '<button class="btn green sm" data-act="decideTime" data-c="' + esc(b.candidateId) + '">この時間に決める</button>' : '';
+      h += resCard(b, r.memberCount, act, isTime);
     });
     if (S.candEdit) {
       var nSel = Object.keys(S.candEdit).filter(function (k) { return S.candEdit[k]; }).length;
       h += '<div class="row"><button class="btn danger sm" data-act="removeSelected"' + (nSel ? '' : ' disabled') + '>選んだ' + nSel + 'つを消す</button><button class="btn ghost sm" data-act="candEditOff">やめる</button></div>';
     } else if (ev.status === '日程調整中') {
       h += '<div class="row"><button class="btn ghost sm" data-act="addCand">候補日を足す</button><button class="btn ghost sm" data-act="candEditOn">候補日を消す</button></div>';
+    } else if (isTime) {
+      h += '<div class="row"><button class="btn ghost sm" data-act="addTimes">時間の候補を足す</button><button class="btn ghost sm" data-act="candEditOn">時間の候補を消す</button></div>';
     }
     if (r.attendance) h += '</details>';
+    if (isTime && r.dateStage) {
+      h += '<details><summary class="sub" style="cursor:pointer;margin:6px 0">日程調整のときの結果</summary>' +
+        r.dateStage.byDate.map(function (b) { return resCard(b, r.memberCount, '', false); }).join('') + '</details>';
+    }
     h += '</div><div>';
     // 右側:LINEに流す文・ひとこと・来てほしい人・代わりに入れる(名指しの催促はしない。11/27 伊吹)
     h += '<div class="card"><b>LINEに流す文</b><div class="sub" style="margin:2px 0 6px">直してからコピーしてもOK</div>' +
@@ -261,9 +269,50 @@
     return h + '</div></div>';
   }
 
+  /** 候補1つぶんの結果カード。timeOnly=true なら時刻を大きく出す(時間の候補) */
+  function resCard(b, memberCount, act, timeOnly) {
+    var total = Math.max(1, memberCount);
+    var head = timeOnly ? esc(b.time || '時間未定') + ' <span class="sub">' + fmtDate(b.date) + '</span>'
+      : fmtDate(b.date) + (b.time ? ' <span class="sub">' + esc(b.time) + '</span>' : '');
+    return '<div class="card res' + (b.best ? ' best' : '') + '">' + (b.best ? '<div class="crown">' + (timeOnly ? 'いちばん多い時間' : 'いちばん多い日') + '</div>' : '') +
+      '<div class="row"><div class="grow date">' + head + (b.memo ? ' <span class="sub">' + esc(b.memo) + '</span>' : '') + '</div>' +
+      '<span class="cnt"><span class="o">○' + b.o + '</span><span class="t">△' + b.t + '</span><span class="x">×' + b.x + '</span></span>' + (act || '') + '</div>' +
+      '<div class="bar"><i style="width:' + (b.o / total * 100) + '%;background:var(--o)"></i><i style="width:' + (b.t / total * 100) + '%;background:var(--t)"></i><i style="width:' + (b.x / total * 100) + '%;background:var(--x)"></i></div>' +
+      '<div class="names">' + [['○', 'o'], ['△', 't'], ['×', 'x']].map(function (m) {
+        var list = (b.names && b.names[m[1]]) || []; return list.length ? '<div><span class="lab ' + m[1] + '">' + m[0] + '</span>' + list.map(esc).join('・') + '</div>' : ''; }).join('') + '</div>' +
+      (b.wanted ? '<div class="wanted">来てほしい人:' + (b.wanted.ok.length ? '<b style="color:var(--o)">○ ' + b.wanted.ok.map(esc).join('・') + '</b> ' : '') +
+        (b.wanted.maybe.length ? '<span style="color:var(--t-ink)">△ ' + b.wanted.maybe.map(esc).join('・') + '</span> ' : '') +
+        (b.wanted.ng.length ? '<span style="color:var(--danger)">× ' + b.wanted.ng.map(esc).join('・') + '</span> ' : '') +
+        (b.wanted.none.length ? '<span class="sub">未回答 ' + b.wanted.none.map(esc).join('・') + '</span>' : '') + '</div>' : '') + '</div>';
+  }
+
+  function timeInputs(list) {
+    return '<div class="picked">' + list.map(function (t, i) {
+      return '<span class="pick"><input type="time" data-in="mTime" data-i="' + i + '" value="' + esc(t) + '"><button data-act="mTimeDel" data-i="' + i + '">✕</button></span>'; }).join('') +
+      '<button class="btn ghost sm" data-act="mTimeAdd">＋時間</button></div>';
+  }
+
+  /** いまの段階の候補(代わりに入れる表に使う) */
+  function stageCands() {
+    var ev = S.res.event, t = ev.status === '時間調整中';
+    return ev.candidates.filter(function (c) { return (c.stage === 'time') === t; });
+  }
+
   // ---- モーダル ----
   function viewModal() {
     var m = S.modal;
+    if (m.type === 'decide') {
+      return '<h2 style="margin-top:0">' + fmtDate(m.date) + ' に決める</h2>' +
+        '<div class="kinds" style="margin-top:10px">' +
+        '<button class="kind' + (!m.askTime ? ' on' : '') + '" data-act="decideMode" data-v="0"><b>そのまま出欠確認に進む</b><span>' + (m.time ? esc(m.time) + ' からで決まり。' : '') + '○の人は「行く」、×の人は「行かない」が仮に入ります</span></button>' +
+        '<button class="kind' + (m.askTime ? ' on' : '') + '" data-act="decideMode" data-v="1"><b>時間も聞く</b><span>同じリンクで「何時からがいい?」を聞きます。時間が決まったら出欠確認に進みます</span></button></div>' +
+        (m.askTime ? '<div class="field"><label>時間の候補</label>' + timeInputs(m.times) + '</div>' : '') +
+        '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn green" data-act="saveDecide">決める</button></div>';
+    }
+    if (m.type === 'addTimes') {
+      return '<h2 style="margin-top:0">時間の候補を足す</h2>' + timeInputs(m.times) +
+        '<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveTimes">足す</button></div>';
+    }
     if (m.type === 'link') {
       return '<h2 style="margin-top:0">' + esc(m.title) + '</h2><div class="linkbox"><input readonly value="' + esc(m.link) + '"><button class="btn sm" data-act="copyLink">コピー</button></div>' +
         '<div class="qr" style="margin-top:14px"><img src="' + qrImg(m.link) + '" alt="QRコード"><div class="sub">画面で見せて読み込んでもらう用</div></div>' +
@@ -279,9 +328,9 @@
         '</div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn ghost" data-act="closeModal">やめる</button><button class="btn" data-act="saveWanted">保存</button></div>';
     }
     if (m.type === 'proxy') {
-      var cands = S.res.event.candidates;
+      var cands = stageCands();
       return '<h2 style="margin-top:0">代わりに入れる</h2><div class="sub">締め切り後でも入れられます。押すと切りかわり、「保存」でまとめて送ります</div>' +
-        '<table class="grid2" style="margin-top:10px"><tr><th>名前</th>' + cands.map(function (c) { return '<th>' + fmtDate(c.date) + '</th>'; }).join('') + '</tr>' +
+        '<table class="grid2" style="margin-top:10px"><tr><th>名前</th>' + cands.map(function (c) { return '<th>' + (c.stage === 'time' ? esc(c.time) : fmtDate(c.date) + (c.time ? '<br><span class="sub">' + esc(c.time) + '</span>' : '')) + '</th>'; }).join('') + '</tr>' +
         S.res.answersByMember.map(function (x) {
           return '<tr><td>' + esc(x.name) + '</td>' + cands.map(function (c) {
             var v = (m.edit[x.memberId] || x.answers)[c.id] || '';
@@ -403,11 +452,37 @@
     closeModal: function () { S.modal = null; render(); },
     copyRemind: function () { copy(S.remind != null ? S.remind : S.res.shareText); },
     decide: function (el) {
-      if (!confirm('この日に決めて、出欠確認に切りかえますか?(○の人は「行く」、×の人は「行かない」が仮に入ります)')) return;
-      call('adminDecide', [S.group.group.id, S.res.event.id, el.getAttribute('data-c')]).then(function () { toast('決めました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+      var c = S.res.event.candidates.filter(function (x) { return x.id === el.getAttribute('data-c'); })[0];
+      if (!c) return;
+      S.modal = { type: 'decide', candId: c.id, date: c.date, time: c.time, askTime: false, times: [c.time || '18:00', ''] }; render();
+    },
+    decideMode: function (el) { S.modal.askTime = el.getAttribute('data-v') === '1'; render(); },
+    mTimeAdd: function () { S.modal.times.push(''); render(); },
+    mTimeDel: function (el) { S.modal.times.splice(+el.getAttribute('data-i'), 1); render(); },
+    saveDecide: function () {
+      var m = S.modal, times = m.times.filter(Boolean);
+      if (m.askTime && !times.length) { toast('時間の候補を1つ以上入れてください'); return; }
+      call('adminDecide', [S.group.group.id, S.res.event.id, m.candId, { askTime: m.askTime, times: times }]).then(function () {
+        S.modal = null; S.remind = null; toast(m.askTime ? '時間を聞く形にしました。LINEに流す文が変わっています' : '決めました'); loadEvent(S.group.group.id, S.res.event.id, true);
+      }).catch(fail);
+    },
+    decideTime: function (el) {
+      if (!confirm('この時間に決めて、出欠確認に切りかえますか?(○の人は「行く」、×の人は「行かない」が仮に入ります)')) return;
+      call('adminDecideTime', [S.group.group.id, S.res.event.id, el.getAttribute('data-c')]).then(function () { S.remind = null; toast('決めました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
+    },
+    addTimes: function () { S.modal = { type: 'addTimes', times: [''] }; render(); },
+    saveTimes: function () {
+      var times = S.modal.times.filter(Boolean);
+      if (!times.length) { S.modal = null; render(); return; }
+      var d = S.res.event.candidates.filter(function (c) { return c.id === S.res.event.decidedId; })[0];
+      call('adminAddCandidates', [S.group.group.id, S.res.event.id, times.map(function (t) { return { date: d ? d.date : '', time: t }; })]).then(function () { S.modal = null; toast('足しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
     },
     undecide: function () {
-      if (!confirm('日程調整に戻しますか?(出欠の答えは残ります)')) return;
+      var ev = S.res.event, dec = ev.candidates.filter(function (c) { return c.id === ev.decidedId; })[0];
+      var msg = ev.status === '時間調整中' ? '日程調整に戻しますか?(時間の候補は消えます)'
+        : dec && dec.stage === 'time' ? '時間の調整に戻しますか?(出欠の答えは残ります)' : '日程調整に戻しますか?(出欠の答えは残ります)';
+      if (!confirm(msg)) return;
+      S.remind = null;
       call('adminUndecide', [S.group.group.id, S.res.event.id]).then(function () { loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
     },
     closeEvent: function () {
@@ -448,7 +523,7 @@
     saveProxy: function () {
       var ids = Object.keys(S.modal.edit);
       var gid = S.group.group.id, eid = S.res.event.id;
-      ids.reduce(function (p, mid) { return p.then(function () { return call('adminSetAnswer', [gid, eid, mid, S.modal.edit[mid], '']); }); }, Promise.resolve())
+      ids.reduce(function (p, mid) { return p.then(function () { return call('adminSetAnswer', [gid, eid, mid, S.modal.edit[mid], null]); }); }, Promise.resolve()) // null = ひとことはそのまま
         .then(function () { S.modal = null; toast('保存しました'); loadEvent(gid, eid, true); }).catch(fail);
     },
     groupMascot: function (el) {
@@ -487,7 +562,8 @@
       if (!v) return;
       call('adminSetAttendance', [S.group.group.id, S.res.event.id, el.getAttribute('data-m'), { status: v }]).then(function () { toast('保存しました'); loadEvent(S.group.group.id, S.res.event.id, true); }).catch(fail);
     },
-    'c.time': function (v, el) { S.form.cands[+el.getAttribute('data-i')].time = v; }
+    'c.time': function (v, el) { S.form.cands[+el.getAttribute('data-i')].time = v; },
+    mTime: function (v, el) { S.modal.times[+el.getAttribute('data-i')] = v; }
   };
   ['name', 'description', 'place', 'cost', 'url', 'deadline', 'visibility', 'defTime', 'wd', 'weeks'].forEach(function (k) { INPUTS['f.' + k] = function (v) { S.form[k] = v; }; });
   var CHANGE_ONLY = { fGrade: 1, fGender: 1, attSel: 1, wantedChk: 1, candChk: 1 };

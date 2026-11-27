@@ -53,6 +53,11 @@ const once = g.adminCreateEvent(tok, '', { name: '研究室の打ち上げ', can
 const ev4 = g.adminCreateEvent(tok, circle.groupId, { name: '男女ミックスバレー', place: '体育館', candidates: [{ date: '2026-12-08', time: '18:00' }, { date: '2026-12-09', time: '18:00' }] }).data;
 g.adminSetAnswer(tok, circle.groupId, ev4.eventId, ms[1].memberId, { C01: '○', C02: '×' }, '');
 g.adminDecide(tok, circle.groupId, ev4.eventId, 'C01');
+// 日にちが決まって、時間を聞いているイベントも1つ(11/27 追加)
+const ev5 = g.adminCreateEvent(tok, circle.groupId, { name: 'クリスマス会', candidates: [{ date: '2026-12-19', time: '18:00' }, { date: '2026-12-20', time: '18:00' }] }).data;
+[0, 1, 2].forEach(i => g.adminSetAnswer(tok, circle.groupId, ev5.eventId, ms[i + 1].memberId, { C01: '○', C02: i ? '×' : '○' }, ''));
+g.adminDecide(tok, circle.groupId, ev5.eventId, 'C01', { askTime: true, times: ['17:00', '18:00', '19:00'] });
+g.adminSetAnswer(tok, circle.groupId, ev5.eventId, ms[2].memberId, { C03: '×', C04: '○', C05: '○' }, null);
 
 // ---- ページ ----
 function include(name) { return fs.readFileSync(path.join(SRC, name + '.html'), 'utf8'); }

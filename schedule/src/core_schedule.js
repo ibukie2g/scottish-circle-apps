@@ -197,7 +197,10 @@ function remindText(event, names, link) {
  */
 function shareText(event, decided, link) {
   var lines = [];
-  if (decided) {
+  if (decided && event.status === '時間調整中') {
+    lines.push('【' + event.name + '】' + formatDateJa(decided.date) + ' に決まりました!');
+    lines.push('何時からがいいか、ここから教えてください🙌');
+  } else if (decided) {
     lines.push('【' + event.name + '】' + formatDateJa(decided.date) + (decided.time ? ' ' + decided.time : '') + ' に決まりました!');
     lines.push('行けるかどうか、ここから教えてください🙌');
   } else {
@@ -207,6 +210,15 @@ function shareText(event, decided, link) {
   if (event.place) lines.push('📍 ' + event.place);
   if (link) lines.push(link);
   return lines.join('\n');
+}
+
+/** 答えの行を、指定した候補日だけに絞る(日程と時間の答えを同じ行に持っているため。11/27) */
+function rowsForCandidates(rows, ids) {
+  return (rows || []).map(function (r) {
+    var a = parseAnswers(r.answers), o = {};
+    ids.forEach(function (id) { if (a[id]) o[id] = a[id]; });
+    return Object.assign({}, r, { answers: formatAnswers(o, ids) });
+  });
 }
 
 /** 締め切りを過ぎたか(締め切りの日の 23:59 まではOK)。nowYmd は 'YYYY-MM-DD'(日本時間) */
@@ -288,6 +300,6 @@ if (typeof module !== 'undefined' && module.exports) {
     parseAnswers: parseAnswers, formatAnswers: formatAnswers, normalizeName: normalizeName, nameLength: nameLength,
     formatDateJa: formatDateJa, expandDates: expandDates, sortCandidates: sortCandidates, filterMembers: filterMembers,
     unanswered: unanswered, summarize: summarize, summarizeAttendance: summarizeAttendance, presetAttendance: presetAttendance,
-    remindText: remindText, shareText: shareText, isClosed: isClosed, isArchived: isArchived, nextId: nextId, calendarData: calendarData
+    remindText: remindText, shareText: shareText, rowsForCandidates: rowsForCandidates, isClosed: isClosed, isArchived: isArchived, nextId: nextId, calendarData: calendarData
   };
 }

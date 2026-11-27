@@ -147,6 +147,17 @@ function appendRows_(ssId, name, headers, objs) {
   invalidateTables_(ssId, [name]);
 }
 
+/** 見出しに足りない列があれば、右の端に足す(あとから列を増やしたとき、前に作ったファイルにも足すため) */
+function ensureColumns_(ssId, name, headers) {
+  var sh = sheet_(ssId, name, headers);
+  var cols = Math.max(1, sh.getLastColumn());
+  var hs = sh.getRange(1, 1, 1, cols).getValues()[0].map(toStr_);
+  var missing = headers.filter(function (h) { return hs.indexOf(h) < 0; });
+  if (!missing.length) return;
+  sh.getRange(1, hs.filter(function (h) { return h; }).length + 1, 1, missing.length).setValues([missing]);
+  invalidateTables_(ssId, [name]);
+}
+
 /** 1行の一部の列だけ書き換える */
 function updateRow_(ssId, name, row, patch) {
   var sh = sheet_(ssId, name);

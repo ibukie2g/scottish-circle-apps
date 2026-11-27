@@ -159,3 +159,12 @@ data = {
 - コースの選択・会費の受け取り(場所・お金などの細かい連絡はLINEで流す。11/27 伊吹)
 - 定員(「行く」が定員に達したら知らせる)
 - 練習の毎週の出欠、LINEへの通知、ほかの人がグループを作る機能
+
+## 日にちを決めてから時間を聞く(2段階。11/27 追加)
+
+- `adminDecide(token, groupId, eventId, candidateId, opts)`:opts = `{ askTime: true, times: ['17:00','19:00'] }` なら状態を「時間調整中」にし、決まった日付で時間の候補(段階='時間')を足す。決まった候補日ID = 日程の候補。opts がなければ今までどおり「出欠確認中」
+- `adminDecideTime(token, groupId, eventId, timeCandidateId)`:時間調整中 → 出欠確認中。決まった候補日ID = 時間の候補。時間の答えから 行く/行かない を仮に入れる
+- `adminUndecide`:出欠確認中(時間まで決めた)→ 時間調整中 → 日程調整中。日程調整中に戻すとき、時間の候補は消し、答えからも外す
+- `adminAddCandidates` / `adminRemoveCandidates`:時間調整中は時間の候補だけを足す・消す(決まった日は消せない)
+- `adminGetResults`:byDate はいまの段階の候補。`dateStage`(日程のときの結果)と、時間まで決めたあとは `dateStage.timeStage` もつく
+- 参加者:同じリンクのまま。`getEvent` の candidates はいまの段階の候補、`mine.answers` もいまの段階の答えだけ。`submitAnswers` はいまの段階の答えだけ書きかえ、ほかの段階の答えとひとことは残す(ひとことが null/undefined なら残す)

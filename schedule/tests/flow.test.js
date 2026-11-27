@@ -202,3 +202,92 @@ test('グループの名前を変えられる(リンクはそのまま)', () => 
   assert.equal(ok(g.openGroup(tk, '')).group.name, '男子会');
   assert.equal(g.adminUpdateGroup(token, made.groupId, { name: '  ' }).error.code, 'INVALID');
 });
+
+test('日にちを決めてから時間を聞く(2段階):時間調整中 → 時間を決める → 出欠。戻すと1段ずつ戻る', () => {
+  const { g, token, files } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '友達', kind: 'グループ' }));
+  const tk = made.link.split('g=')[1], gid = made.groupId;
+  // 「段階」の列がない古いファイルでも動くように、列を消しておく
+  const gf = Object.values(files).find(f => f.getSheetByName('候補日'));
+  const cs = gf.getSheetByName('候補日');
+  cs.data = [cs.data[0].slice(0, 5)];
+  const ev = ok(g.adminCreateEvent(token, gid, { name: 'ご飯', candidates: [{ date: '2026-12-19', time: '18:00' }, { date: '2026-12-20', time: '' }] }));
+  const a = ok(g.joinGroup(tk, { name: 'たろう' })), b = ok(g.joinGroup(tk, { name: 'はなこ' }));
+  let view = ok(g.getEvent(tk, ev.eventId, a.memberId));
+  const [D1, D2] = view.candidates.map(x => x.id);
+  ok(g.submitAnswers(tk, ev.eventId, a.memberId, { [D1]: '○', [D2]: '×' }, '楽しみ'));
+  ok(g.submitAnswers(tk, ev.eventId, b.memberId, { [D1]: '○', [D2]: '○' }, ''));
+
+  // 時間の候補がないとだめ
+  assert.equal(g.adminDecide(token, gid, ev.eventId, D1, { askTime: true, times: [] }).error.code, 'INVALID');
+  const e1 = ok(g.adminDecide(token, gid, ev.eventId, D1, { askTime: true, times: ['17:00', '19:00', '19:00'] }));
+  assert.equal(e1.status, '時間調整中');
+  assert.equal(e1.decidedId, D1);
+  assert.equal(e1.candidates.filter(c => c.stage === 'time').length, 2, '同じ時刻は1つにまとまる');
+  assert.equal(cs.data[0][5], '段階', '古いファイルにも列が足される');
+
+  // 参加者:同じリンクで時間の候補だけが出る。日程の答えは残る
+  view = ok(g.getEvent(tk, ev.eventId, a.memberId));
+  assert.equal(view.event.status, '時間調整中');
+  assert.equal(view.event.decided.date, '2026-12-19');
+  assert.equal(view.event.decided.time, '');
+  assert.equal(view.event.closed, false);
+  assert.equal(view.event.calendar, null);
+  assert.deepEqual(view.candidates.map(c => c.time), ['17:00', '19:00']);
+  assert.deepEqual(view.mine.answers, {}, '時間はまだ答えていない');
+  assert.equal(view.results.dateStage.byDate.length, 2);
+  const [T1, T2] = view.candidates.map(x => x.id);
+  ok(g.submitAnswers(tk, ev.eventId, a.memberId, { [T1]: '×', [T2]: '○' }, undefined));
+  ok(g.submitAnswers(tk, ev.eventId, b.memberId, { [T1]: '○', [T2]: '×' }, ''));
+  view = ok(g.getEvent(tk, ev.eventId, a.memberId));
+  assert.deepEqual(view.mine.answers, { [T1]: '×', [T2]: '○' });
+  assert.equal(view.mine.comment, '楽しみ', 'ひとことは消えない');
+  assert.equal(view.results.dateStage.byDate.find(x => x.candidateId === D1).o, 2, '日程の答えも残っている');
+  const home = ok(g.openGroup(tk, a.memberId)).events[0];
+  assert.equal(home.myAnswered, true);
+
+  // 運営:結果は時間の候補。LINEの文は「何時からがいいか」
+  let res = ok(g.adminGetResults(token, gid, ev.eventId));
+  assert.deepEqual(res.byDate.map(x => x.time), ['17:00', '19:00']);
+  assert.match(res.shareText, /12\/19.*に決まりました/);
+  assert.match(res.shareText, /何時から/);
+  assert.equal(res.dateStage.byDate.length, 2);
+  // 日程の候補は時間調整中には消せない(決まった日)
+  assert.equal(g.adminRemoveCandidates(token, gid, ev.eventId, [D1]).error.code, 'INVALID');
+  // 時間の候補を足せる(日付は決まった日になる)
+  const added = ok(g.adminAddCandidates(token, gid, ev.eventId, [{ date: '2026-12-01', time: '20:00' }]));
+  const T3 = added.candidates.find(c => c.stage === 'time' && c.time === '20:00');
+  assert.equal(T3.date, '2026-12-19');
+  ok(g.adminRemoveCandidates(token, gid, ev.eventId, [T3.id]));
+
+  // 時間を決める → 出欠確認中。時間の答えから 行く/行かない が仮に入る
+  assert.equal(g.adminDecideTime(token, gid, ev.eventId, D2).error.code, 'NOT_FOUND');
+  const e2 = ok(g.adminDecideTime(token, gid, ev.eventId, T2));
+  assert.equal(e2.status, '出欠確認中');
+  res = ok(g.adminGetResults(token, gid, ev.eventId));
+  assert.deepEqual(res.attendance.totals.names, { go: ['たろう'], partial: [], no: ['はなこ'] });
+  assert.match(res.shareText, /12\/19.*19:00 に決まりました/);
+  assert.equal(res.dateStage.timeStage.byDate.length, 2);
+  view = ok(g.getEvent(tk, ev.eventId, b.memberId));
+  assert.equal(view.event.decided.time, '19:00');
+  assert.ok(view.event.calendar);
+
+  // 戻す:出欠確認中 → 時間調整中 → 日程調整中
+  assert.equal(ok(g.adminUndecide(token, gid, ev.eventId)).status, '時間調整中');
+  const back = ok(g.adminUndecide(token, gid, ev.eventId));
+  assert.equal(back.status, '日程調整中');
+  assert.equal(back.candidates.length, 2, '時間の候補は消える');
+  view = ok(g.getEvent(tk, ev.eventId, a.memberId));
+  assert.deepEqual(view.mine.answers, { [D1]: '○', [D2]: '×' }, '日程の答えはそのまま、時間の答えは外れる');
+});
+
+test('日にちを決めるとき、時間を聞かなければ今までどおり出欠確認中になる', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '友達', kind: 'グループ' }));
+  const gid = made.groupId;
+  const ev = ok(g.adminCreateEvent(token, gid, { name: 'ご飯', candidates: [{ date: '2026-12-19', time: '18:00' }] }));
+  const D1 = ev.eventId && ok(g.adminGetResults(token, gid, ev.eventId)).byDate[0].candidateId;
+  const e = ok(g.adminDecide(token, gid, ev.eventId, D1, { askTime: false }));
+  assert.equal(e.status, '出欠確認中');
+  assert.equal(ok(g.adminUndecide(token, gid, ev.eventId)).status, '日程調整中');
+});

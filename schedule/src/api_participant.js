@@ -17,10 +17,13 @@ function openGroup(token, memberId) {
       var answered = false;
       if (me) {
         if (ev.status === EV_RSVP) answered = readAttendance_(g, ev.id).some(function (r) { return r.memberId === me.memberId && r.status; });
-        else answered = readAnswers_(g, ev.id).some(function (r) { return r.memberId === me.memberId && Object.keys(parseAnswers(r.answers)).length; });
+        else {
+          var ids = stageCandidates_(ev, cands).map(function (c) { return c.id; });
+          answered = readAnswers_(g, ev.id).some(function (r) { return r.memberId === me.memberId && ids.some(function (id) { return parseAnswers(r.answers)[id]; }); });
+        }
       }
-      return { id: ev.id, name: ev.name, status: ev.status, deadline: ev.deadline, closed: ev.status === EV_RSVP ? false : isClosed(ev, today),
-        archived: isArchived(ev, cands, today), decided: decided ? { date: decided.date, time: decided.time } : null, myAnswered: answered };
+      return { id: ev.id, name: ev.name, status: ev.status, deadline: ev.deadline, closed: (ev.status === EV_RSVP || ev.status === EV_TIME) ? false : isClosed(ev, today),
+        archived: isArchived(ev, cands, today), decided: decided ? { date: decided.date, time: ev.status === EV_TIME ? '' : decided.time } : null, myAnswered: answered };
     });
     // 答えていない・終わっていないものを先に
     events.sort(function (a, b) {
@@ -90,9 +93,20 @@ function getEvent(token, eventId, memberId) {
   });
 }
 
+/**
+ * いまの段階で答える候補:時間調整中は時間の候補、それ以外は日程の候補(11/27)
+ * 時間の候補は、決まった日のものだけ
+ */
+function stageCandidates_(ev, cands) {
+  if (ev.status === EV_TIME) return (cands || []).filter(function (c) { return c.stage === 'time'; });
+  return (cands || []).filter(function (c) { return c.stage !== 'time'; });
+}
+
 /** 画面に返すイベントの形(参加者用。運営は adminGetResults) */
 function eventView_(g, ev, memberId, fresh) {
-  var cands = sortCandidates(readCandidates_(g, ev.id, fresh));
+  var all = sortCandidates(readCandidates_(g, ev.id, fresh));
+  var cands = stageCandidates_(ev, all);
+  var dateCands = all.filter(function (c) { return c.stage !== 'time'; });
   var members = readMembers_(g, fresh);
   var answers = readAnswers_(g, ev.id, fresh);
   var att = readAttendance_(g, ev.id, fresh);
@@ -100,27 +114,33 @@ function eventView_(g, ev, memberId, fresh) {
   var mineT = att.filter(function (r) { return r.memberId === memberId; }).pop();
   var today = todayYmd_();
   var results = null;
+  var pack = function (list) {
+    var ids = list.map(function (c) { return c.id; });
+    var s = summarize(list, rowsForCandidates(answers, ids), members, { withNames: ev.visibility === '名前' });
+    return { answeredCount: s.answeredCount, memberCount: g.kind === KIND_CIRCLE ? s.memberCount : null,
+      byDate: s.byDate.map(function (d) { return { candidateId: d.candidateId, date: d.date, time: d.time, o: d.o, t: d.t, x: d.x, names: d.names, best: d.best }; }) };
+  };
   if (ev.visibility !== '伊吹だけ') {
     var withNames = ev.visibility === '名前';
-    var s = summarize(cands, answers, members, { withNames: withNames });
-    results = {
-      answeredCount: s.answeredCount,
-      memberCount: g.kind === KIND_CIRCLE ? s.memberCount : null,
-      byDate: s.byDate.map(function (d) { return { candidateId: d.candidateId, date: d.date, time: d.time, o: d.o, t: d.t, x: d.x, names: d.names, best: d.best }; }),
-      attendance: ev.status === EV_RSVP ? summarizeAttendance(att, members, withNames) : null
-    };
+    results = pack(cands);
+    results.attendance = ev.status === EV_RSVP ? summarizeAttendance(att, members, withNames) : null;
+    // 出欠確認中・時間調整中は、前の段階(日程)の結果も「日程調整のときの回答」として見られるように
+    if (ev.status !== EV_POLL) results.dateStage = pack(dateCands);
   }
-  var decided = ev.decidedId ? cands.filter(function (c) { return c.id === ev.decidedId; })[0] : null;
+  var decided = ev.decidedId ? all.filter(function (c) { return c.id === ev.decidedId; })[0] : null;
   return {
     event: { id: ev.id, name: ev.name, description: ev.description, place: ev.place, cost: ev.cost, url: ev.url,
       // 締め切りは日程調整のためのもの。出欠確認中は「終了」になるまで答えられる
-      status: ev.status, deadline: ev.deadline, closed: ev.status === EV_RSVP ? false : isClosed(ev, today), visibility: ev.visibility,
-      decided: decided ? { candidateId: decided.id, date: decided.date, time: decided.time } : null,
+      // 時間調整中も、締め切り(日程のためのもの)に関係なく答えられる
+      status: ev.status, deadline: ev.deadline, closed: (ev.status === EV_RSVP || ev.status === EV_TIME) ? false : isClosed(ev, today), visibility: ev.visibility,
+      decided: decided ? { candidateId: decided.id, date: decided.date, time: ev.status === EV_TIME ? '' : decided.time } : null,
       // 決まった日をカレンダーに追加する用(Googleカレンダーのリンクと、iPhoneなどの .ics の中身)
-      calendar: decided ? calendarData({ title: ev.name, date: decided.date, time: decided.time, place: ev.place, url: ev.url }) : null },
-    candidates: cands.map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo }; }),
+      calendar: decided && ev.status !== EV_TIME ? calendarData({ title: ev.name, date: decided.date, time: decided.time, place: ev.place, url: ev.url }) : null },
+    candidates: cands.map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo, stage: c.stage }; }),
+    dateCandidates: dateCands.map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo }; }),
     mine: {
-      answers: mineA ? parseAnswers(mineA.answers) : {},
+      // いまの段階の答えだけ(時間調整中なら、時間の答え)
+      answers: mineA ? parseAnswers(rowsForCandidates([mineA], cands.map(function (c) { return c.id; }))[0].answers) : {},
       comment: mineA ? mineA.comment : '',
       attendance: mineT ? { status: mineT.status, comment: mineT.comment, arriveAt: mineT.arriveAt } : null
     },
@@ -134,8 +154,8 @@ function submitAnswers(token, eventId, memberId, answers, comment) {
     var g = groupByToken_(token);
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
-      if (isClosed(ev, todayYmd_())) throw appError_('CLOSED', '締め切りを過ぎたので変えられません');
-      if (ev.status !== EV_POLL) throw appError_('CLOSED', '日にちが決まったので、出欠のほうに答えてください');
+      if (ev.status === EV_POLL && isClosed(ev, todayYmd_())) throw appError_('CLOSED', '締め切りを過ぎたので変えられません');
+      if (ev.status !== EV_POLL && ev.status !== EV_TIME) throw appError_('CLOSED', '日にちが決まったので、出欠のほうに答えてください');
       saveAnswers_(g, ev, toStr_(memberId), answers, comment);
       return { savedAt: Date.now() };
     });
@@ -146,10 +166,17 @@ function submitAnswers(token, eventId, memberId, answers, comment) {
 function saveAnswers_(g, ev, memberId, answers, comment) {
   var member = readMembersRaw_(g, true).filter(function (m) { return m.memberId === memberId && m.active; })[0];
   if (!member) throw appError_('NOT_FOUND', '自分の名前が見つかりません。もう一度選んでください');
-  var ids = sortCandidates(readCandidates_(g, ev.id, true)).map(function (c) { return c.id; });
-  var str = formatAnswers(answers || {}, ids);
-  var text = normalizeName(comment).slice(0, 100);
+  var all = sortCandidates(readCandidates_(g, ev.id, true));
+  var ids = all.map(function (c) { return c.id; });
+  // いまの段階の候補だけを書きかえ、ほかの段階の答え(日程の答えなど)は残す
+  var stageIds = stageCandidates_(ev, all).map(function (c) { return c.id; });
   var cur = readAnswers_(g, ev.id, true).filter(function (r) { return r.memberId === memberId; });
+  var merged = cur.length ? parseAnswers(cur[cur.length - 1].answers) : {};
+  stageIds.forEach(function (id) { delete merged[id]; });
+  var inp = answers || {};
+  stageIds.forEach(function (id) { if (inp[id]) merged[id] = inp[id]; });
+  var str = formatAnswers(merged, ids);
+  var text = comment == null && cur.length ? cur[cur.length - 1].comment : normalizeName(comment).slice(0, 100);
   var obj = { 'イベントID': ev.id, 'メンバーID': memberId, '答え': str, 'ひとこと': text, '更新時刻': Date.now() };
   if (cur.length) updateRow_(g.fileId, G_ANSWERS, cur[cur.length - 1]._row, obj);
   else appendRows_(g.fileId, G_ANSWERS, G_ANSWERS_H, [obj]);

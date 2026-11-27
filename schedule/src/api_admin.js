@@ -37,7 +37,8 @@ function adminListGroups(token) {
             var cands = readCandidates_(g, ev.id);
             var answered = ev.status === EV_RSVP
               ? readAttendance_(g, ev.id).filter(function (r) { return r.status; }).length
-              : readAnswers_(g, ev.id).filter(function (r) { return Object.keys(parseAnswers(r.answers)).length; }).length;
+              : rowsForCandidates(readAnswers_(g, ev.id), stageCandidates_(ev, cands).map(function (c) { return c.id; }))
+                .filter(function (r) { return Object.keys(parseAnswers(r.answers)).length; }).length;
             return { id: ev.id, name: ev.name, status: ev.status, deadline: ev.deadline, answered: answered,
               archived: isArchived(ev, cands, today), link: eventLink_(g, ev) };
           })
@@ -136,7 +137,14 @@ function adminGetGroup(token, groupId) {
 function eventForAdmin_(g, ev) {
   return { id: ev.id, name: ev.name, description: ev.description, place: ev.place, cost: ev.cost, url: ev.url,
     status: ev.status, visibility: ev.visibility, deadline: ev.deadline, decidedId: ev.decidedId, link: eventLink_(g, ev),
-    candidates: sortCandidates(readCandidates_(g, ev.id)).map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo }; }) };
+    candidates: sortCandidates(readCandidates_(g, ev.id)).map(function (c) { return { id: c.id, date: c.date, time: c.time, memo: c.memo, stage: c.stage }; }) };
+}
+
+/** 時間調整中なら、決まった日(日程の候補)。出欠確認中で時間の候補が決まっているなら、その元の日 */
+function decidedDateCand_(cands, ev) {
+  var c = cands.filter(function (x) { return x.id === ev.decidedId; })[0];
+  if (c && c.stage === 'time') return cands.filter(function (x) { return x.stage !== 'time' && x.date === c.date; })[0] || null;
+  return c || null;
 }
 
 /** 入力を整える(イベントの名前・説明など) */
@@ -197,20 +205,26 @@ function adminCreateEvent(token, groupId, input) {
   });
 }
 
-function addCandidates_(g, eventId, cands) {
+/** stage = 'time' なら時間の候補として足す(同じ日時でも、日程の候補とは別もの) */
+function addCandidates_(g, eventId, cands, stage) {
+  var isTime = stage === 'time';
+  if (isTime) ensureColumns_(g.fileId, G_CANDS, G_CANDS_H); // 前に作ったファイルには「段階」の列がない
   var have = readCandidates_(g, eventId, true);
   var ids = have.map(function (c) { return c.id; });
   var key = {};
-  have.forEach(function (c) { key[c.date + ' ' + c.time] = true; });
+  have.forEach(function (c) { if ((c.stage === 'time') === isTime) key[c.date + ' ' + c.time] = true; });
   var adds = [];
   cands.forEach(function (c) {
     if (key[c.date + ' ' + c.time]) return; // 同じ日時は足さない
     key[c.date + ' ' + c.time] = true;
     var id = nextId('C', ids, 2);
     ids.push(id);
-    adds.push({ '候補日ID': id, 'イベントID': eventId, '日付': c.date, '時刻': c.time, 'メモ': c.memo });
+    var row = { '候補日ID': id, 'イベントID': eventId, '日付': c.date, '時刻': c.time, 'メモ': c.memo };
+    if (isTime) row['段階'] = STAGE_TIME;
+    adds.push(row);
   });
   appendRows_(g.fileId, G_CANDS, G_CANDS_H, adds);
+  return adds.length;
 }
 
 function adminAddCandidates(token, groupId, eventId, candidates) {
@@ -219,8 +233,12 @@ function adminAddCandidates(token, groupId, eventId, candidates) {
     var g = groupById_(groupId);
     var cands = cleanCandidates_(candidates);
     return withLock_(function () {
-      eventById_(g, eventId, true);
-      addCandidates_(g, eventId, cands);
+      var ev = eventById_(g, eventId, true);
+      if (ev.status === EV_TIME) {
+        var d = decidedDateCand_(readCandidates_(g, eventId, true), ev);
+        cands.forEach(function (c) { if (!c.time) throw appError_('INVALID', '時間の候補には時刻を入れてください'); if (d) c.date = d.date; });
+      }
+      addCandidates_(g, eventId, cands, ev.status === EV_TIME ? 'time' : 'date');
       return eventForAdmin_(g, eventById_(g, eventId, true));
     });
   });
@@ -240,9 +258,13 @@ function adminRemoveCandidates(token, groupId, eventId, candidateIds) {
     if (!ids.length) throw appError_('INVALID', '消す候補日を選んでください');
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
-      if (ev.decidedId && ids.indexOf(ev.decidedId) >= 0) throw appError_('INVALID', '決まった日は消せません。先に「日程調整に戻す」をしてください');
-      var cands = readCandidates_(g, eventId, true);
-      if (cands.filter(function (c) { return ids.indexOf(c.id) < 0; }).length === 0) throw appError_('INVALID', '候補日を全部は消せません。1つ以上残すか、イベントごと削除してください');
+      var all = readCandidates_(g, eventId, true);
+      var dd = decidedDateCand_(all, ev);
+      if ((ev.decidedId && ids.indexOf(ev.decidedId) >= 0) || (dd && ids.indexOf(dd.id) >= 0)) throw appError_('INVALID', '決まった日は消せません。先に「日程調整に戻す」をしてください');
+      var cands = stageCandidates_(ev, all); // 今の段階の候補だけ消せる
+      ids = ids.filter(function (id) { return cands.some(function (c) { return c.id === id; }); });
+      if (!ids.length) throw appError_('INVALID', '消す候補が見つかりません');
+      if (cands.filter(function (c) { return ids.indexOf(c.id) < 0; }).length === 0) throw appError_('INVALID', '候補を全部は消せません。1つ以上残すか、イベントごと削除してください');
       deleteRows_(g.fileId, G_CANDS, cands.filter(function (c) { return ids.indexOf(c.id) >= 0; }).map(function (c) { return c._row; }));
       return eventForAdmin_(g, eventById_(g, eventId, true));
     });
@@ -294,11 +316,30 @@ function adminGetResults(token, groupId, eventId, filter) {
     var ev = eventById_(g, eventId);
     var all = readMembers_(g);
     var members = g.kind === KIND_CIRCLE ? filterMembers(all, filter || {}) : all.filter(function (m) { return m.active; });
-    var cands = readCandidates_(g, ev.id);
-    var answers = readAnswers_(g, ev.id);
+    var all = readCandidates_(g, ev.id);
+    var cands = stageCandidates_(ev, all);
+    var ids = cands.map(function (c) { return c.id; });
+    var rawAnswers = readAnswers_(g, ev.id);
+    var answers = rowsForCandidates(rawAnswers, ids); // 今の段階の答えだけ
     var wanted = readWanted_(g, ev.id).map(function (w) { return w.memberId; });
     var s = summarize(cands, answers, members, { wanted: wanted, withNames: true });
-    var un = unanswered(members, answers);
+    var un = unanswered(members, answers.filter(function (r) { return Object.keys(parseAnswers(r.answers)).length; }));
+    var dateStage = null;
+    if (ev.status !== EV_POLL) {
+      var dc = all.filter(function (c) { return c.stage !== 'time'; });
+      var timeCands = all.filter(function (c) { return c.stage === 'time'; });
+      var ds = summarize(dc, rowsForCandidates(rawAnswers, dc.map(function (c) { return c.id; })), members, { wanted: wanted, withNames: true });
+      dateStage = { answeredCount: ds.answeredCount, byDate: ds.byDate };
+      if (ev.status !== EV_TIME && timeCands.length) {
+        var ts = summarize(timeCands, rowsForCandidates(rawAnswers, timeCands.map(function (c) { return c.id; })), members, { wanted: wanted, withNames: true });
+        dateStage.timeStage = { answeredCount: ts.answeredCount, byDate: ts.byDate };
+      }
+    }
+    var shareDecided = (function () {
+      if (ev.status === EV_TIME) return decidedDateCand_(all, ev);
+      var c = all.filter(function (x) { return x.id === ev.decidedId; })[0];
+      return ev.status === EV_RSVP && c ? c : null;
+    })();
     var byMember = {};
     answers.forEach(function (r) { byMember[r.memberId] = r; });
     var att = null;
@@ -323,7 +364,8 @@ function adminGetResults(token, groupId, eventId, filter) {
         .map(function (m) { return { name: m.name, comment: byMember[m.memberId].comment }; }),
       unanswered: un.map(function (m) { return { memberId: m.memberId, name: m.name }; }),
       wanted: wanted,
-      shareText: shareText(ev, (function () { var c = cands.filter(function (x) { return x.id === ev.decidedId; })[0]; return ev.status === EV_RSVP && c ? { date: c.date, time: c.time } : null; })(), eventLink_(g, ev)),
+      dateStage: dateStage,
+      shareText: shareText(ev, shareDecided ? { date: shareDecided.date, time: shareDecided.time } : null, eventLink_(g, ev)),
       attendance: att,
       // 運営が代わりに入れるとき用:メンバーごとの答え
       answersByMember: members.filter(function (m) { return m.active; }).map(function (m) {
@@ -347,25 +389,43 @@ function adminSetWanted(token, groupId, eventId, memberIds) {
   });
 }
 
-/** 日にちを決めて「出欠確認中」にする。○→行く、×→行かない を仮に入れる(すでに出欠がある人はそのまま) */
-function adminDecide(token, groupId, eventId, candidateId) {
+/** ○→行く、×→行かない を仮に入れる(すでに出欠がある人はそのまま) */
+function presetAttendanceRows_(g, eventId, candId) {
+  var have = {};
+  readAttendance_(g, eventId, true).forEach(function (r) { have[r.memberId] = true; });
+  var adds = [];
+  readAnswers_(g, eventId, true).forEach(function (r) {
+    if (have[r.memberId]) return;
+    var st = presetAttendance(parseAnswers(r.answers), candId);
+    if (st) adds.push({ 'イベントID': eventId, 'メンバーID': r.memberId, '出欠': st, 'ひとこと': '', '更新時刻': Date.now(), '来られる時間': '' });
+  });
+  appendRows_(g.fileId, G_ATTEND, G_ATTEND_H, adds);
+}
+
+/**
+ * 日にちを決める。
+ * opts.askTime が true なら「時間調整中」にして、opts.times(['18:00','19:00'])を時間の候補として足す(11/27 追加)
+ * そうでなければ「出欠確認中」にして、○→行く、×→行かない を仮に入れる
+ */
+function adminDecide(token, groupId, eventId, candidateId, opts) {
   return api_(function () {
     requireAdmin_(token);
     var g = groupById_(groupId);
+    var o = opts || {};
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
-      var c = readCandidates_(g, eventId, true).filter(function (x) { return x.id === candidateId; })[0];
+      var c = readCandidates_(g, eventId, true).filter(function (x) { return x.id === candidateId && x.stage !== 'time'; })[0];
       if (!c) throw appError_('NOT_FOUND', '候補日が見つかりません');
-      updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_RSVP, '決まった候補日ID': c.id });
-      var have = {};
-      readAttendance_(g, eventId, true).forEach(function (r) { have[r.memberId] = true; });
-      var adds = [];
-      readAnswers_(g, eventId, true).forEach(function (r) {
-        if (have[r.memberId]) return;
-        var st = presetAttendance(parseAnswers(r.answers), c.id);
-        if (st) adds.push({ 'イベントID': eventId, 'メンバーID': r.memberId, '出欠': st, 'ひとこと': '', '更新時刻': Date.now(), '来られる時間': '' });
-      });
-      appendRows_(g.fileId, G_ATTEND, G_ATTEND_H, adds);
+      if (o.askTime) {
+        var times = cleanCandidates_((o.times || []).map(function (t) { return { date: c.date, time: t }; }))
+          .filter(function (t) { return t.time; });
+        if (!times.length) throw appError_('INVALID', '時間の候補を1つ以上入れてください');
+        addCandidates_(g, eventId, times, 'time');
+        updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_TIME, '決まった候補日ID': c.id });
+      } else {
+        updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_RSVP, '決まった候補日ID': c.id });
+        presetAttendanceRows_(g, eventId, c.id);
+      }
       ev = eventById_(g, eventId, true);
       syncEventIndex_(g, ev);
       return eventForAdmin_(g, ev);
@@ -373,14 +433,54 @@ function adminDecide(token, groupId, eventId, candidateId) {
   });
 }
 
-/** 決めた日を取り消して、日程調整に戻す(出欠の答えは残す) */
+/** 時間を決めて「出欠確認中」にする(時間調整中のときだけ)。時間の答えから 行く/行かない を仮に入れる */
+function adminDecideTime(token, groupId, eventId, candidateId) {
+  return api_(function () {
+    requireAdmin_(token);
+    var g = groupById_(groupId);
+    return withLock_(function () {
+      var ev = eventById_(g, eventId, true);
+      if (ev.status !== EV_TIME) throw appError_('INVALID', '時間を聞いているときだけ使えます');
+      var c = readCandidates_(g, eventId, true).filter(function (x) { return x.id === candidateId && x.stage === 'time'; })[0];
+      if (!c) throw appError_('NOT_FOUND', '時間の候補が見つかりません');
+      updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_RSVP, '決まった候補日ID': c.id });
+      presetAttendanceRows_(g, eventId, c.id);
+      ev = eventById_(g, eventId, true);
+      syncEventIndex_(g, ev);
+      return eventForAdmin_(g, ev);
+    });
+  });
+}
+
+/**
+ * 1つ前に戻す(出欠・時間の答えは残す)
+ * - 出欠確認中(時間まで決めた) → 時間調整中
+ * - 時間調整中 → 日程調整中(時間の候補は消す。時間の答えは集計に出なくなる)
+ * - 出欠確認中(日にちだけ決めた) → 日程調整中
+ */
 function adminUndecide(token, groupId, eventId) {
   return api_(function () {
     requireAdmin_(token);
     var g = groupById_(groupId);
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
-      updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_POLL, '決まった候補日ID': '' });
+      var all = readCandidates_(g, eventId, true);
+      var cur = all.filter(function (x) { return x.id === ev.decidedId; })[0];
+      if (ev.status === EV_RSVP && cur && cur.stage === 'time') {
+        var d = decidedDateCand_(all, ev);
+        updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_TIME, '決まった候補日ID': d ? d.id : '' });
+      } else {
+        if (ev.status === EV_TIME) {
+          // 時間の候補を消す。あとで同じIDが使い回されても前の答えが混ざらないよう、答えからも外す
+          var keep = all.filter(function (x) { return x.stage !== 'time'; }).map(function (x) { return x.id; });
+          readAnswers_(g, eventId, true).forEach(function (r) {
+            var next = rowsForCandidates([r], keep)[0].answers;
+            if (next !== r.answers) updateRow_(g.fileId, G_ANSWERS, r._row, { '答え': next });
+          });
+          deleteRows_(g.fileId, G_CANDS, all.filter(function (x) { return x.stage === 'time'; }).map(function (x) { return x._row; }));
+        }
+        updateRow_(g.fileId, G_EVENTS, ev._row, { '状態': EV_POLL, '決まった候補日ID': '' });
+      }
       ev = eventById_(g, eventId, true);
       syncEventIndex_(g, ev);
       return eventForAdmin_(g, ev);

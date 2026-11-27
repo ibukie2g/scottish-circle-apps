@@ -13,7 +13,7 @@ var G_MEMBERS_H = ['メンバーID', '名簿の参加者ID', '表示名', '状�
 var G_EVENTS = 'イベント';
 var G_EVENTS_H = ['イベントID', '名前', '説明', '状態', '結果の見せ方', '締め切り', '決まった候補日ID', 'コース', '作成日', '場所', 'お金の目安', 'リンク'];
 var G_CANDS = '候補日';
-var G_CANDS_H = ['候補日ID', 'イベントID', '日付', '時刻', 'メモ'];
+var G_CANDS_H = ['候補日ID', 'イベントID', '日付', '時刻', 'メモ', '段階']; // 段階:空=日程、'時間'=日にちが決まったあとの時間の候補(11/27 追加)
 var G_ANSWERS = '回答';
 var G_ANSWERS_H = ['イベントID', 'メンバーID', '答え', 'ひとこと', '更新時刻'];
 var G_ATTEND = '出欠';
@@ -32,6 +32,8 @@ var KIND_GROUP = 'グループ';
 var KIND_ONCE = '1回きり';
 var EV_POLL = '日程調整中';
 var EV_RSVP = '出欠確認中';
+var EV_TIME = '時間調整中'; // 日にちが決まって、時間を聞いている(11/27 追加)
+var STAGE_TIME = '時間';
 var EV_DONE = '終了';
 var VIS = ['名前', '人数', '伊吹だけ'];
 
@@ -114,7 +116,8 @@ function readCandidates_(group, eventId, fresh) {
   return readTable_(group.fileId, G_CANDS, fresh).rows
     .filter(function (r) { return toStr_(r['イベントID']) === eventId; })
     .map(function (r) {
-      return { id: toStr_(r['候補日ID']), date: toStr_(r['日付']).slice(0, 10), time: toStr_(r['時刻']), memo: toStr_(r['メモ']), _row: r._row };
+      return { id: toStr_(r['候補日ID']), date: toStr_(r['日付']).slice(0, 10), time: toStr_(r['時刻']), memo: toStr_(r['メモ']),
+        stage: toStr_(r['段階']) === STAGE_TIME ? 'time' : 'date', _row: r._row };
     });
 }
 function readAnswers_(group, eventId, fresh) {
