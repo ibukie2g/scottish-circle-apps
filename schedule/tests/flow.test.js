@@ -91,10 +91,9 @@ test('友達グループ:表示名で加わり、日程調整 → 結果 → 日
   ok(g.adminUpdateEvent(token, gid, ev.eventId, { visibility: '伊吹だけ' }));
   assert.equal(ok(g.getEvent(tk, ev.eventId, a.memberId)).results, null);
 
-  // 運営の結果:未回答と催促文
+  // 運営の結果(LINEに流す文は11/28にやめた)
   const r = ok(g.adminGetResults(token, gid, ev.eventId, {}));
-  assert.match(r.shareText, /^【忘年会】来られる日を教えてください🙌\n締め切り 12\/5\(/);
-  assert.ok(!r.shareText.includes('じろう'), '名指ししない');
+  assert.equal(r.shareText, undefined);
   assert.deepEqual(r.comments, [{ name: 'たろう', comment: '15日は微妙' }]);
 
   // 日にちを決める → ○の人は「行く」、×の人は「行かない」が仮に入る
@@ -246,11 +245,9 @@ test('日にちを決めてから時間を聞く(2段階):時間調整中 → �
   const home = ok(g.openGroup(tk, a.memberId)).events[0];
   assert.equal(home.myAnswered, true);
 
-  // 運営:結果は時間の候補。LINEの文は「何時からがいいか」
+  // 運営:結果は時間の候補
   let res = ok(g.adminGetResults(token, gid, ev.eventId));
   assert.deepEqual(res.byDate.map(x => x.time), ['17:00', '19:00']);
-  assert.match(res.shareText, /12\/19.*に決まりました/);
-  assert.match(res.shareText, /何時から/);
   assert.equal(res.dateStage.byDate.length, 2);
   // 日程の候補は時間調整中には消せない(決まった日)
   assert.equal(g.adminRemoveCandidates(token, gid, ev.eventId, [D1]).error.code, 'INVALID');
@@ -266,7 +263,6 @@ test('日にちを決めてから時間を聞く(2段階):時間調整中 → �
   assert.equal(e2.status, '出欠確認中');
   res = ok(g.adminGetResults(token, gid, ev.eventId));
   assert.deepEqual(res.attendance.totals.names, { go: ['たろう'], partial: [], no: ['はなこ'] });
-  assert.match(res.shareText, /12\/19.*19:00 に決まりました/);
   assert.equal(res.dateStage.timeStage.byDate.length, 2);
   view = ok(g.getEvent(tk, ev.eventId, b.memberId));
   assert.equal(view.event.decided.time, '19:00');

@@ -127,7 +127,6 @@ data = {
               names: { o: [...], t: [...], x: [...] },
               wanted: { ok: ['青木'], maybe: [], ng: ['石井'], none: [] } } ],   // 来てほしい人がその日来られるか
   unanswered: [ { memberId, name } ],           // サークルは名簿の全員から。それ以外は「メンバー」にいて答えていない人
-  remindText: '【忘年会の日程】まだの人お願いします🙏\n〇〇さん、△△さん…\n締め切り 12/5(金)\n<リンク>',  // LINEに貼る用
   attendance: { rows: [ { memberId, name, status, course, paid, comment } ], totals: { go, partial, no, byCourse: {...}, paid } } | null
 }
 ```
@@ -140,7 +139,7 @@ data = {
 | `summarize(candidates, answerRows, members, opts)` | 日ごとの ○△× の人数と名前、多い順の並べ替え、来てほしい人の可否 |
 | `filterMembers(members, { grade, gender })` | 学年・男女の絞り込み |
 | `unanswered(members, answerRows)` | 未回答の人 |
-| `remindText(event, unansweredNames, link)` | 催促文を作る |
+| `remindText` / `shareText` | 催促文・LINEに流す文(11/28 から運営画面では使っていない) |
 | `expandDates({ from, weekdays, weeks, time })` | 「火曜を4週分」のような候補日の一括作成 |
 | `parseAnswers(str)` / `formatAnswers(obj)` | `C01:○,C02:△` の形との相互変換 |
 | `presetAttendance(answers, decidedId)` | 日にちを決めたときの出欠の仮入れ |

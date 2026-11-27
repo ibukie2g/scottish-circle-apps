@@ -367,11 +367,6 @@ function adminGetResults(token, groupId, eventId, filter) {
         dateStage.timeStage = { answeredCount: ts.answeredCount, byDate: ts.byDate };
       }
     }
-    var shareDecided = (function () {
-      if (ev.status === EV_TIME) return decidedDateCand_(all, ev);
-      var c = all.filter(function (x) { return x.id === ev.decidedId; })[0];
-      return ev.status === EV_RSVP && c ? c : null;
-    })();
     var byMember = {};
     answers.forEach(function (r) { byMember[r.memberId] = r; });
     var att = null;
@@ -397,7 +392,6 @@ function adminGetResults(token, groupId, eventId, filter) {
       unanswered: un.map(function (m) { return { memberId: m.memberId, name: m.name }; }),
       wanted: wanted,
       dateStage: dateStage,
-      shareText: shareText(ev, shareDecided ? { date: shareDecided.date, time: shareDecided.time } : null, eventLink_(g, ev)),
       attendance: att,
       // 運営が代わりに入れるとき用:メンバーごとの答え
       answersByMember: members.filter(function (m) { return m.active; }).map(function (m) {

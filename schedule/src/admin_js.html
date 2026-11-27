@@ -270,10 +270,7 @@
         r.dateStage.byDate.map(function (b) { return resCard(b, r.memberCount, '', false); }).join('') + '</details>';
     }
     h += '</div><div>';
-    // 右側:LINEに流す文・ひとこと・来てほしい人・代わりに入れる(名指しの催促はしない。11/27 伊吹)
-    h += '<div class="card"><b>LINEに流す文</b><div class="sub" style="margin:2px 0 6px">直してからコピーしてもOK</div>' +
-      '<textarea class="remind" data-in="remind">' + esc(S.remind != null ? S.remind : r.shareText) + '</textarea>' +
-      '<button class="btn sm" style="margin-top:6px" data-act="copyRemind">コピー</button></div>';
+    // 右側:ひとこと・来てほしい人・代わりに入れる(LINEに流す文は11/28にやめた。リンクは上の「リンク・QR」から)
     if (r.comments.length) h += '<h2>ひとこと</h2><div class="card">' + r.comments.map(function (c) { return '<div><b>' + esc(c.name) + '</b>:' + esc(c.comment) + '</div>'; }).join('') + '</div>';
     h += '<h2>そのほか</h2><div class="card"><div class="row" style="margin-bottom:8px"><span class="grow">来てほしい人(' + r.wanted.length + '人)</span><button class="btn ghost sm" data-act="editWanted">選ぶ</button></div>' +
       '<div class="row"><span class="grow">LINEなどで聞いた答えを代わりに入れる</span><button class="btn ghost sm" data-act="proxy">入れる</button></div></div>';
@@ -461,7 +458,6 @@
     showLink: function (el) { S.modal = { type: 'link', link: el.getAttribute('data-link'), title: el.getAttribute('data-title') }; render(); },
     copyLink: function () { copy(S.modal.link); },
     closeModal: function () { S.modal = null; render(); },
-    copyRemind: function () { copy(S.remind != null ? S.remind : S.res.shareText); },
     decide: function (el) {
       var c = S.res.event.candidates.filter(function (x) { return x.id === el.getAttribute('data-c'); })[0];
       if (!c) return;
@@ -474,7 +470,7 @@
       var m = S.modal, times = m.times.filter(Boolean);
       if (m.askTime && !times.length) { toast('時間の候補を1つ以上入れてください'); return; }
       call('adminDecide', [S.group.group.id, S.res.event.id, m.candId, { askTime: m.askTime, times: times }]).then(function () {
-        S.modal = null; S.remind = null; toast(m.askTime ? '時間を聞く形にしました。LINEに流す文が変わっています' : '決めました'); loadEvent(S.group.group.id, S.res.event.id, true);
+        S.modal = null; S.remind = null; toast(m.askTime ? '時間を聞く形にしました' : '決めました'); loadEvent(S.group.group.id, S.res.event.id, true);
       }).catch(fail);
     },
     decideTime: function (el) {
