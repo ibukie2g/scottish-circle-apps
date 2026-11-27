@@ -1,8 +1,13 @@
 // Supabase につなぐ。参加者はログイン画面なしで、開いたときに自動で匿名ログインする
 import { createClient } from '@supabase/supabase-js';
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+// 公開してよい値(URL と publishable キー)なので、ここに直接書いておく。
+// 11/28:Vercel の環境変数が組み立てに渡らなかったため。環境変数があればそちらを使う。
+// 秘密の鍵(sb_secret_… / service_role)は絶対にここへ書かない
+const DEFAULT_URL = 'https://rkdsfjnzbcyykfzrdtsy.supabase.co';
+const DEFAULT_KEY = 'sb_publishable_K3NPQ8SA6s67US9sirHXUw_AOzPDrnR';
+const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || DEFAULT_URL;
+const key = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) || DEFAULT_KEY;
 
 export const configured = !!(url && key);
 
