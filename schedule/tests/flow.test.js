@@ -330,3 +330,33 @@ test('サークル:消した名簿の人は「名簿の新しい人を足す」�
   assert.equal(ok(g.adminSyncRoster(token, gid)).added, 0);
   assert.equal(ok(g.adminGetGroup(token, gid)).members.length, 2);
 });
+
+test('ほかのグループのイベントもまとめて見る:リンクとメンバーIDが合うものだけ。名前では結ばない', () => {
+  const { g, token } = world();
+  const A = ok(g.adminCreateGroup(token, { name: 'サークルっぽい', kind: 'グループ' }));
+  const B = ok(g.adminCreateGroup(token, { name: '男子会っぽい', kind: 'グループ' }));
+  const tA = A.link.split('g=')[1], tB = B.link.split('g=')[1];
+  const eA = ok(g.adminCreateEvent(token, A.groupId, { name: 'ご飯', candidates: [{ date: '2099-12-19', time: '18:00' }] }));
+  ok(g.adminCreateEvent(token, B.groupId, { name: '飲み', candidates: [{ date: '2099-12-20', time: '19:00' }] }));
+  const meA = ok(g.joinGroup(tA, { name: 'たろう' }));
+  const meB = ok(g.joinGroup(tB, { name: 'たろちゃん' })); // グループごとに名前がちがってもよい
+  const otherB = ok(g.joinGroup(tB, { name: 'たろう' })); // 同じ名前の別人
+
+  let r = ok(g.myEvents([{ token: tA, memberId: meA.memberId }, { token: tB, memberId: meB.memberId }]));
+  assert.deepEqual(r.groups.map(x => [x.group.name, x.me.name, x.events.length]), [['サークルっぽい', 'たろう', 1], ['男子会っぽい', 'たろちゃん', 1]]);
+  assert.equal(r.groups[0].events[0].myAnswered, false);
+  const C1 = ok(g.getEvent(tA, eA.eventId, meA.memberId)).candidates[0].id;
+  ok(g.submitAnswers(tA, eA.eventId, meA.memberId, { [C1]: '○' }, ''));
+  r = ok(g.myEvents([{ token: tA, memberId: meA.memberId }]));
+  assert.equal(r.groups[0].events[0].myAnswered, true);
+
+  // Aのメンバーで、Bのリンクを使っても見えない(メンバーIDがそのグループにいない)
+  assert.equal(ok(g.myEvents([{ token: tB, memberId: 'M999' }])).groups.length, 0);
+  // リンクがちがう・空は無視
+  assert.equal(ok(g.myEvents([{ token: 'xxxx', memberId: meA.memberId }, { token: '', memberId: '' }, null])).groups.length, 0);
+  // 同じ名前の別人の分は、その人のメンバーIDがないと出ない(名前では結ばない)
+  assert.equal(ok(g.myEvents([{ token: tB, memberId: otherB.memberId }])).groups[0].me.name, 'たろう');
+  // 削除されたメンバーは出ない
+  ok(g.adminSetMemberActive(token, B.groupId, meB.memberId, false));
+  assert.equal(ok(g.myEvents([{ token: tB, memberId: meB.memberId }])).groups.length, 0);
+});

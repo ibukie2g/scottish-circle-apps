@@ -168,3 +168,9 @@ data = {
 - `adminAddCandidates` / `adminRemoveCandidates`:時間調整中は時間の候補だけを足す・消す(決まった日は消せない)
 - `adminGetResults`:byDate はいまの段階の候補。`dateStage`(日程のときの結果)と、時間まで決めたあとは `dateStage.timeStage` もつく
 - 参加者:同じリンクのまま。`getEvent` の candidates はいまの段階の候補、`mine.answers` もいまの段階の答えだけ。`submitAnswers` はいまの段階の答えだけ書きかえ、ほかの段階の答えとひとことは残す(ひとことが null/undefined なら残す)
+
+## ほかのグループのイベントもまとめて見る(11/27 追加)
+
+- `myEvents(items)`:items = `[{ token, memberId }]`(スマホが覚えている「グループのリンク+そこで選んだ自分」。最大20)。リンクとメンバーIDが合い、メンバーが抜けていないものだけ、終わっていないイベントを返す → `{ groups: [{ token, group: { id, name, kind }, me: { name }, events }] }`
+- 名前では結ばない(別の名前で入っていても見える/同じ名前の別人の予定は混ざらない/リンクを開いたことのないグループは出ない)
+- 参加者の画面:グループの一覧の下に「ほかのグループ」、イベントの画面の下に「ほかのグループにも、まだ答えていないのが◯こ」

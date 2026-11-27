@@ -45,7 +45,7 @@
 
   // ===== 読み込み =====
   function start() {
-    if (!TOKEN) { S.view = 'home'; render(); return; }
+    if (!TOKEN) { S.view = 'home'; render(); loadOthers(); return; }
     loadGroup(true);
   }
 
@@ -61,6 +61,7 @@
         S.view = 'pick'; render(); loadMembers(); return;
       }
       lsSet('sch.name', S.me.name);
+      if (first) loadOthers();
       if (first) {
         var only = S.events.filter(function (e) { return !e.archived; });
         if (EVENT_PARAM) return openEvent(EVENT_PARAM);
@@ -69,6 +70,27 @@
       }
       S.view = 'group'; render();
     }).catch(showError);
+  }
+
+  /**
+   * このスマホが名前を選んだことのある、ほかのグループのイベントも読む(11/27 追加)
+   * 名前では結ばない。スマホが覚えている「グループのリンク+そこで選んだ自分」だけを送る
+   */
+  function myItems(exceptToken) {
+    var ids = lsGet('sch.knownGroupIds', {});
+    return lsGet('sch.groups', []).filter(function (g) { return g.token !== exceptToken; }).map(function (g) {
+      var gid = g.groupId || ids[g.token] || '';
+      return { token: g.token, memberId: gid ? lsGet('sch.me.' + gid, '') : '' };
+    }).filter(function (x) { return x.memberId; });
+  }
+  function loadOthers() {
+    var items = myItems(TOKEN);
+    if (!items.length) { S.others = []; return; }
+    call('myEvents', [items]).then(function (d) {
+      S.others = d.groups.filter(function (x) { return x.events.length; });
+      // 1つのイベントだけ開いている人にも、ほかのグループが見えるように一覧を出す
+      if (S.view === 'group' || S.view === 'home' || S.view === 'event') render();
+    }).catch(function () { S.others = []; });
   }
 
   function loadMembers() {
@@ -132,6 +154,7 @@
     var list = lsGet('sch.groups', []);
     var h = '<h1 style="margin-top:20px">日程調整</h1>';
     if (!list.length) return h + '<p class="muted">LINEなどで送られたリンクから開いてね。</p>';
+    h += othersPart('参加中のイベント');
     h += '<p class="muted">前に開いたグループ</p>';
     list.forEach(function (g) {
       h += '<a class="card ev" style="text-decoration:none" href="' + esc(linkFor(g.token)) + '" target="_top"><div class="row"><div class="grow"><b>' + esc(g.name) + '</b></div><span class="muted">›</span></div></a>';
@@ -207,11 +230,27 @@
       old.forEach(function (e) { h += evCard(e); });
       h += '</details>';
     }
+    h += othersPart('ほかのグループ');
     h += '<div class="foot"><button class="link" data-act="changeMe">' + esc(S.me.name) + 'さんではない</button></div>';
     return h;
   }
 
-  function evCard(e) {
+  /** ほかのグループのイベント(このスマホで名前を選んだことのあるグループだけ)。押すとそのグループのリンクに移る */
+  function othersPart(title) {
+    var list = S.others || [];
+    if (!list.length) return '';
+    var todo = 0;
+    list.forEach(function (x) { x.events.forEach(function (e) { if (!e.myAnswered && !e.closed && e.status !== '終了') todo++; }); });
+    var h = '<div class="section">' + esc(title) + (todo ? ' <span class="badge todo">まだ ' + todo + '</span>' : '') + '</div>';
+    list.forEach(function (x) {
+      h += '<div class="muted" style="margin:10px 2px 6px">' + esc(x.group.name) + '<span style="font-size:12px"> ・ ' + esc(x.me.name) + ' さんとして</span></div>';
+      x.events.forEach(function (e) { h += evCard(e, linkFor(x.token, e.id)); });
+    });
+    return h;
+  }
+
+  /** href があれば、ほかのグループのイベント(リンクで移る) */
+  function evCard(e, href) {
     var badge;
     if (e.status === '終了') badge = '<span class="badge">終わり</span>';
     else if (e.status === '出欠確認中') badge = e.myAnswered ? '<span class="badge done">出欠OK</span>' : '<span class="badge todo">出欠を答えてね</span>';
@@ -220,13 +259,14 @@
     else badge = e.myAnswered ? '<span class="badge done">答えた</span>' : '<span class="badge todo">まだ</span>';
     var sub = e.decided ? '決定:' + fmtDate(e.decided.date) + (e.decided.time ? ' ' + esc(e.decided.time) : '')
       : (e.deadline ? '締め切り ' + fmtDate(e.deadline) : '');
-    return '<button class="card ev" data-act="openEvent" data-id="' + esc(e.id) + '"><div class="row"><div class="grow"><b>' + esc(e.name) + '</b>' +
-      (sub ? '<div class="muted">' + sub + '</div>' : '') + '</div>' + badge + '</div></button>';
+    var inner = '<div class="row"><div class="grow"><b>' + esc(e.name) + '</b>' + (sub ? '<div class="muted">' + sub + '</div>' : '') + '</div>' + badge + '</div>';
+    if (href) return '<a class="card ev" style="display:block;text-decoration:none;color:inherit" href="' + esc(href) + '" target="_top">' + inner + '</a>';
+    return '<button class="card ev" data-act="openEvent" data-id="' + esc(e.id) + '">' + inner + '</button>';
   }
 
   function viewEvent() {
     var g = S.group, d = S.ev;
-    var multi = S.events.length > 1 || g.kind !== '1回きり';
+    var multi = S.events.length > 1 || g.kind !== '1回きり' || !!(S.others && S.others.length);
     var h = '<div class="topbar">' + (multi ? '<button class="back" data-act="toGroup">← ' + esc(g.name) + '</button>' : '<span class="grp">' + esc(g.name) + '</span>') +
       '</div>' + meBar();
     if (!d) return h + '<div class="loading">読み込み中…</div>';
@@ -254,6 +294,10 @@
     if (ev.status === '出欠確認中' || (ev.status === '終了' && ev.decided)) h += rsvpPart(d);
     else h += pollPart(d);
     h += resultsPart(d);
+    // ほかのグループにまだ答えていないものがあれば知らせる(一覧で見られる)
+    var otherTodo = 0;
+    (S.others || []).forEach(function (x) { x.events.forEach(function (e) { if (!e.myAnswered && !e.closed && e.status !== '終了') otherTodo++; }); });
+    if (otherTodo) h += '<button class="card ev" style="margin-top:16px" data-act="toGroup"><div class="row"><div class="grow"><b>ほかのグループにも、まだ答えていないのが' + otherTodo + 'こあるよ</b></div><span class="muted">›</span></div></button>';
     h += '<div class="foot"><button class="link" data-act="changeMe">' + esc(S.me.name) + 'さんではない</button></div>';
     return h;
   }

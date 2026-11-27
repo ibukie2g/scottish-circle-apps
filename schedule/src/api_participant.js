@@ -10,8 +10,48 @@ function openGroup(token, memberId) {
     if (!g.active) throw appError_('NOT_FOUND', 'このグループはしまわれています');
     var members = readMembers_(g);
     var me = members.filter(function (m) { return m.memberId === toStr_(memberId) && m.active; })[0] || null;
-    var today = todayYmd_();
-    var events = readEvents_(g).map(function (ev) {
+    var events = groupEvents_(g, me);
+    // 答えていない・終わっていないものを先に
+    events.sort(function (a, b) {
+      var ka = (a.archived ? 2 : 0) + (a.myAnswered ? 1 : 0), kb = (b.archived ? 2 : 0) + (b.myAnswered ? 1 : 0);
+      return ka - kb;
+    });
+    return {
+      // memberCount:名前を選ぶ画面で「前にこのグループに入ったことがある」を、名前の一覧を待たずにすぐ出すため
+      group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot, memberCount: members.filter(function (m) { return m.active; }).length },
+      me: me ? { memberId: me.memberId, name: me.name } : null,
+      events: events
+    };
+  });
+}
+
+/**
+ * このスマホが入っているほかのグループのイベントもまとめて返す(11/27 追加)
+ * items = [{ token, memberId }](スマホが覚えている分だけ)。名前では結ばない。リンク(合言葉)とメンバーIDが合うものだけ返す
+ * 終わったもの(archived)は返さない
+ */
+function myEvents(items) {
+  return api_(function () {
+    var out = [];
+    (items || []).slice(0, 20).forEach(function (it) {
+      var t = toStr_(it && it.token), mid = toStr_(it && it.memberId);
+      if (!t || !mid) return;
+      var g = readGroups_().filter(function (x) { return x.token === t; })[0];
+      if (!g || !g.active) return;
+      var me = readMembers_(g).filter(function (m) { return m.memberId === mid && m.active; })[0];
+      if (!me) return;
+      var events = groupEvents_(g, me).filter(function (e) { return !e.archived; });
+      events.sort(function (a, b) { return (a.myAnswered ? 1 : 0) - (b.myAnswered ? 1 : 0); });
+      out.push({ token: t, group: { id: g.id, name: g.name, kind: g.kind }, me: { name: me.name }, events: events });
+    });
+    return { groups: out };
+  });
+}
+
+/** グループのイベント一覧(自分が答えたかどうかつき) */
+function groupEvents_(g, me) {
+  var today = todayYmd_();
+  return readEvents_(g).map(function (ev) {
       var cands = readCandidates_(g, ev.id);
       var decided = ev.decidedId ? cands.filter(function (c) { return c.id === ev.decidedId; })[0] : null;
       var answered = false;
@@ -25,18 +65,6 @@ function openGroup(token, memberId) {
       return { id: ev.id, name: ev.name, status: ev.status, deadline: ev.deadline, closed: (ev.status === EV_RSVP || ev.status === EV_TIME) ? false : isClosed(ev, today),
         archived: isArchived(ev, cands, today), decided: decided ? { date: decided.date, time: ev.status === EV_TIME ? '' : decided.time } : null, myAnswered: answered };
     });
-    // 答えていない・終わっていないものを先に
-    events.sort(function (a, b) {
-      var ka = (a.archived ? 2 : 0) + (a.myAnswered ? 1 : 0), kb = (b.archived ? 2 : 0) + (b.myAnswered ? 1 : 0);
-      return ka - kb;
-    });
-    return {
-      // memberCount:名前を選ぶ画面で「前にこのグループに入ったことがある」を、名前の一覧を待たずにすぐ出すため
-      group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot, memberCount: members.filter(function (m) { return m.active; }).length },
-      me: me ? { memberId: me.memberId, name: me.name } : null,
-      events: events
-    };
-  });
 }
 
 /** 「自分を選ぶ」画面用のメンバー一覧(サークルはふりがな順・学年つき) */
