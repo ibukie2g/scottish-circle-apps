@@ -37,6 +37,8 @@ function formatAnswers(obj, candidateIds) {
 function normalizeName(v) {
   return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
 }
+/** 同じ人かどうかを比べる用。空白(全角も)を全部取る(「青木 ひなた」と「青木ひなた」を同じとみなす) */
+function nameKey(v) { return normalizeName(v).replace(/[\s　]/g, ''); }
 function nameLength(v) { return Array.from(String(v || '')).length; }
 
 /** '2026-12-15' → '12/15(火)' */
@@ -299,7 +301,7 @@ function utcStamp_(d) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MARKS: MARKS, NAME_MAX: NAME_MAX, ARCHIVE_DAYS: ARCHIVE_DAYS,
-    parseAnswers: parseAnswers, formatAnswers: formatAnswers, normalizeName: normalizeName, nameLength: nameLength,
+    parseAnswers: parseAnswers, formatAnswers: formatAnswers, normalizeName: normalizeName, nameKey: nameKey, nameLength: nameLength,
     formatDateJa: formatDateJa, expandDates: expandDates, sortCandidates: sortCandidates, filterMembers: filterMembers,
     unanswered: unanswered, summarize: summarize, summarizeAttendance: summarizeAttendance, presetAttendance: presetAttendance,
     remindText: remindText, shareText: shareText, rowsForCandidates: rowsForCandidates, isClosed: isClosed, isArchived: isArchived, nextId: nextId, calendarData: calendarData

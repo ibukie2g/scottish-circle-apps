@@ -124,13 +124,45 @@ function adminGetGroup(token, groupId) {
   return api_(function () {
     requireAdmin_(token);
     var g = groupById_(groupId);
-    var members = readMembers_(g).filter(function (m) { return m.active; });
+    var all = readMembers_(g);
+    var members = all.filter(function (m) { return m.active; });
     if (g.kind === KIND_CIRCLE) members.sort(function (a, b) { return (a.kana || a.name).localeCompare(b.kana || b.name, 'ja'); });
+    // 抜けた(運営が消した)人。名簿から消えた人は出さない
+    var raw = {};
+    readMembersRaw_(g).forEach(function (m) { raw[m.memberId] = m; });
+    var removed = all.filter(function (m) { return raw[m.memberId] && !raw[m.memberId].active; });
+    // 人ごとに、答えたイベントの数(二重に登録した人のどちらを消すか決める手がかり)
+    var events = readEvents_(g);
+    var count = {};
+    events.forEach(function (ev) {
+      var seen = {};
+      readAnswers_(g, ev.id).forEach(function (r) { if (Object.keys(parseAnswers(r.answers)).length) seen[r.memberId] = true; });
+      readAttendance_(g, ev.id).forEach(function (r) { if (r.status) seen[r.memberId] = true; });
+      Object.keys(seen).forEach(function (id) { count[id] = (count[id] || 0) + 1; });
+    });
     return {
       group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot, link: groupLink_(g) },
-      members: members.map(function (m) { return { memberId: m.memberId, name: m.name, grade: m.grade || '', gender: m.gender || '' }; }),
-      events: readEvents_(g).map(function (ev) { return eventForAdmin_(g, ev); })
+      members: members.map(function (m) { return { memberId: m.memberId, name: m.name, grade: m.grade || '', gender: m.gender || '', answered: count[m.memberId] || 0 }; }),
+      removed: removed.map(function (m) { return { memberId: m.memberId, name: m.name, answered: count[m.memberId] || 0 }; }),
+      events: events.map(function (ev) { return eventForAdmin_(g, ev); })
     };
+  });
+}
+
+/**
+ * メンバーを消す・戻す(二重に登録してしまった人など。11/27 追加)
+ * 行は消さず「状態」を「抜けた」にするだけ。答えはシートに残るが、集計・一覧・名前を選ぶ画面には出なくなる。戻すと元どおり
+ */
+function adminSetMemberActive(token, groupId, memberId, active) {
+  return api_(function () {
+    requireAdmin_(token);
+    var g = groupById_(groupId);
+    return withLock_(function () {
+      var m = readMembersRaw_(g, true).filter(function (x) { return x.memberId === toStr_(memberId); })[0];
+      if (!m) throw appError_('NOT_FOUND', 'メンバーが見つかりません');
+      updateRow_(g.fileId, G_MEMBERS, m._row, { '状態': active ? 'いる' : '抜けた' });
+      return { memberId: m.memberId, active: !!active };
+    });
   });
 }
 

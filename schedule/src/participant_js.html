@@ -162,7 +162,8 @@
     if (S.joinErr) h += '<div class="err">' + esc(S.joinErr) + '</div>';
     h += '<button class="btn" data-act="joinSimple"' + (S.sending ? ' disabled' : '') + '>この名前で参加する</button>';
     if (S.members && S.members.length) {
-      h += '<details><summary>前にこのグループに入ったことがある(名前を選ぶ)</summary>';
+      // 前に入った人用:小さくて見つけにくかったので、区切りをつけて大きなボタンにした(11/27 伊吹)
+      h += '<div class="or"><span>または</span></div><details class="returning"><summary class="btn ghost">前にこのグループに入ったことがある<small>自分の名前を一覧から選ぶ</small></summary>';
       S.members.forEach(function (m) {
         h += '<button class="card member" data-act="pickMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '"><b>' + esc(m.name) + '</b></button>';
       });

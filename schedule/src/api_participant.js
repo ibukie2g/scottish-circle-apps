@@ -60,7 +60,8 @@ function joinGroup(token, input) {
     if (!name || nameLength(name) > NAME_MAX) throw appError_('INVALID', '名前は1〜' + NAME_MAX + '文字で入れてください');
     return withLock_(function () {
       var members = readMembers_(g, true);
-      var same = members.filter(function (m) { return m.active && normalizeName(m.name) === name; })[0];
+      // 空白のあるなしだけちがう名前も同じとみなす(二重登録を防ぐ)
+      var same = members.filter(function (m) { return m.active && nameKey(m.name) === nameKey(name); })[0];
       if (same) throw appError_('INVALID', '同じ名前の人がいます。一覧から選ぶか、名前を少し変えてください');
       var memberId = nextId('M', members.map(function (m) { return m.memberId; }), 3);
       var row = { 'メンバーID': memberId, '名簿の参加者ID': '', '表示名': '', '状態': 'いる', '登録日': todayYmd_() };

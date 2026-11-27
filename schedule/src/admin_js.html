@@ -140,7 +140,18 @@
         '<div class="sub">候補 ' + e.candidates.filter(function (c) { return c.stage !== 'time'; }).length + '日' + (e.deadline ? ' ・ 締め切り ' + fmtDate(e.deadline) : '') + '</div></span>' + badge(e.status) + '</button>';
     });
     h += '</div><div><h2 style="margin-top:0">メンバー(' + d.members.length + '人)</h2><div class="card" style="max-height:420px;overflow:auto">';
-    d.members.forEach(function (m) { h += '<div style="padding:3px 0">' + esc(m.name) + (m.grade ? ' <span class="sub">' + esc(m.grade) + '</span>' : '') + '</div>'; });
+    // 二重に登録した人を消せるように(どちらを消すか分かるよう、答えたイベントの数も出す)
+    d.members.forEach(function (m) {
+      h += '<div class="row" style="padding:3px 0"><span class="grow">' + esc(m.name) + (m.grade ? ' <span class="sub">' + esc(m.grade) + '</span>' : '') +
+        ' <span class="sub">答え ' + m.answered + '件</span></span>' +
+        '<button class="btn ghost sm" data-act="removeMember" data-id="' + esc(m.memberId) + '" data-name="' + esc(m.name) + '" data-n="' + m.answered + '">削除</button></div>';
+    });
+    if ((d.removed || []).length) {
+      h += '<details style="margin-top:8px"><summary class="sub" style="cursor:pointer">削除したメンバー(' + d.removed.length + '人)</summary>' +
+        d.removed.map(function (m) {
+          return '<div class="row" style="padding:3px 0"><span class="grow sub">' + esc(m.name) + ' ・ 答え ' + m.answered + '件</span>' +
+            '<button class="btn ghost sm" data-act="restoreMember" data-id="' + esc(m.memberId) + '">戻す</button></div>'; }).join('') + '</details>';
+    }
     h += '</div><h2>設定</h2><div class="card">' +
       '<div class="field" style="margin-top:0"><label>グループの名前</label><div class="row"><input data-in="groupName" maxlength="30" value="' + esc(S.groupName != null ? S.groupName : g.name) + '" style="flex:1;padding:8px 10px;border:1.5px solid var(--line);border-radius:10px">' +
       '<button class="btn sm" data-act="renameGroup">保存</button></div><div class="hint">参加者の画面にも、新しい名前で出ます。リンクは変わりません</div></div>' +
@@ -542,6 +553,15 @@
       call('adminUpdateGroup', [S.group.group.id, { name: name }]).then(function () {
         S.group.group.name = name; S.groupName = null; toast('名前を変えました'); render();
       }).catch(fail);
+    },
+    removeMember: function (el) {
+      var name = el.getAttribute('data-name'), n = +el.getAttribute('data-n');
+      if (!confirm('「' + name + '」をメンバーから削除しますか?\n' + (n ? 'この人の答え(' + n + '件)は集計に出なくなります。' : '') +
+        '名前を選ぶ画面にも出なくなります。\nあとで「削除したメンバー」から戻せます。')) return;
+      call('adminSetMemberActive', [S.group.group.id, el.getAttribute('data-id'), false]).then(function () { toast('削除しました'); loadGroup(S.group.group.id); }).catch(fail);
+    },
+    restoreMember: function (el) {
+      call('adminSetMemberActive', [S.group.group.id, el.getAttribute('data-id'), true]).then(function () { toast('戻しました'); loadGroup(S.group.group.id); }).catch(fail);
     },
     syncRoster: function () { call('adminSyncRoster', [S.group.group.id]).then(function (d) { toast(d.added + '人を足しました'); loadGroup(S.group.group.id); }).catch(fail); },
     archiveGroup: function () {

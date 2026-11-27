@@ -291,3 +291,41 @@ test('日にちを決めるとき、時間を聞かなければ今までどお�
   assert.equal(e.status, '出欠確認中');
   assert.equal(ok(g.adminUndecide(token, gid, ev.eventId)).status, '日程調整中');
 });
+
+test('二重登録:空白のあるなしだけちがう名前は止める。運営はメンバーを消せて、戻せる', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '友達', kind: 'グループ' }));
+  const tk = made.link.split('g=')[1], gid = made.groupId;
+  const ev = ok(g.adminCreateEvent(token, gid, { name: 'ご飯', candidates: [{ date: '2026-12-19', time: '18:00' }] }));
+  const a = ok(g.joinGroup(tk, { name: '山田 太郎' }));
+  assert.equal(g.joinGroup(tk, { name: '山田太郎' }).error.code, 'INVALID');
+  assert.equal(g.joinGroup(tk, { name: '山田　太郎' }).error.code, 'INVALID');
+  const b = ok(g.joinGroup(tk, { name: '山田 次郎' }));
+  const C1 = ok(g.getEvent(tk, ev.eventId, a.memberId)).candidates[0].id;
+  ok(g.submitAnswers(tk, ev.eventId, a.memberId, { [C1]: '○' }, ''));
+  ok(g.submitAnswers(tk, ev.eventId, b.memberId, { [C1]: '○' }, ''));
+
+  let grp = ok(g.adminGetGroup(token, gid));
+  assert.equal(grp.members.find(m => m.memberId === b.memberId).answered, 1);
+  ok(g.adminSetMemberActive(token, gid, b.memberId, false));
+  grp = ok(g.adminGetGroup(token, gid));
+  assert.deepEqual(grp.members.map(m => m.memberId), [a.memberId]);
+  assert.deepEqual(grp.removed.map(m => m.memberId), [b.memberId]);
+  assert.equal(ok(g.listMembers(tk)).members.length, 1, '名前を選ぶ画面にも出ない');
+  assert.equal(ok(g.adminGetResults(token, gid, ev.eventId)).byDate[0].o, 1, '消した人の答えは集計に出ない');
+  assert.equal(ok(g.openGroup(tk, b.memberId)).me, null, '消された人のスマホは、名前を選び直しになる');
+
+  ok(g.adminSetMemberActive(token, gid, b.memberId, true));
+  assert.equal(ok(g.adminGetResults(token, gid, ev.eventId)).byDate[0].o, 2, '戻すと答えも戻る');
+  assert.equal(g.adminSetMemberActive(token, gid, 'M999', false).error.code, 'NOT_FOUND');
+});
+
+test('サークル:消した名簿の人は「名簿の新しい人を足す」で戻ってこない', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: 'サークル', kind: 'サークル' }));
+  const gid = made.groupId;
+  const first = ok(g.adminGetGroup(token, gid)).members[0];
+  ok(g.adminSetMemberActive(token, gid, first.memberId, false));
+  assert.equal(ok(g.adminSyncRoster(token, gid)).added, 0);
+  assert.equal(ok(g.adminGetGroup(token, gid)).members.length, 2);
+});
