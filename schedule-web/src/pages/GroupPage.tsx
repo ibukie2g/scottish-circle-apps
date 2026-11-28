@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { todayJst } from '../core/schedule';
 import { api, isTodo, type GroupView, type OtherGroup } from '../lib/api';
+import { supabase } from '../lib/supabase';
 import { ErrorView, EventCard, eventPath, Hero, isOld, Loading, MeBar } from '../ui';
 import { PickName } from './PickName';
 
@@ -84,7 +85,12 @@ export function GroupPage({ token }: { token: string }) {
 export function HomePage() {
   const [others, setOthers] = useState<OtherGroup[] | null>(null);
   useEffect(() => {
-    api.myEvents().then(setOthers).catch(() => setOthers([]));
+    // 一番上のページでは、新しく匿名ログインしない(リンクの下見をするロボットなどが開くたびに匿名ユーザーが増えていたため。11/28)
+    // このブラウザで前にグループを開いたことがある人だけ、参加中のイベントを出す
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) { setOthers([]); return; }
+      api.myEvents().then(setOthers).catch(() => setOthers([]));
+    });
   }, []);
   return (
     <>

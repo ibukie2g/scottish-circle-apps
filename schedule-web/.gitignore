@@ -6,3 +6,6 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+# 引っ越しのデータ(本名が入る)はコミットしない
+a-export*.json
+a-import-*.json

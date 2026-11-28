@@ -356,3 +356,38 @@ test('ほかのグループのイベントもまとめて見る:リンクとメ�
   ok(g.adminSetMemberActive(token, B.groupId, meB.memberId, false));
   assert.equal(ok(g.myEvents([{ token: tB, memberId: meB.memberId }])).groups.length, 0);
 });
+
+test('B案への引っ越し:引っ越し中は答えられない → 書き出し → 引っ越しました(新しいリンク)→ 戻す', () => {
+  const { g, token } = world();
+  const made = ok(g.adminCreateGroup(token, { name: '男子会', kind: 'グループ' }));
+  const tk = made.link.split('g=')[1];
+  const gid = ok(g.adminListGroups(token)).groups[0].id;
+  const ev = ok(g.adminCreateEvent(token, gid, { name: '飲み会', candidates: [{ date: '2026-12-19', time: '19:00' }, { date: '2026-12-20', time: '' }] }));
+  const me = ok(g.joinGroup(tk, { name: 'たろう' }));
+  const ids = ok(g.getEvent(tk, ev.eventId, me.memberId)).candidates.map(c => c.id);
+  ok(g.submitAnswers(tk, ev.eventId, me.memberId, { [ids[0]]: '○', [ids[1]]: '×' }, 'よろしく'));
+  assert.equal(ok(g.openGroup(tk, me.memberId)).move, null);
+
+  ok(g.adminSetMove(token, 'moving'));
+  assert.equal(g.submitAnswers(tk, ev.eventId, me.memberId, { [ids[0]]: '×' }).error.code, 'MOVING');
+  assert.equal(g.joinGroup(tk, { name: 'じろう' }).error.code, 'MOVING');
+  assert.deepEqual(ok(g.openGroup(tk, me.memberId)).move, { mode: 'moving', link: '' });
+
+  const data = ok(g.adminExportForB(token));
+  assert.equal(data.format, 'schedule-a-export-v1');
+  assert.equal(data.groups.length, 1);
+  const eg = data.groups[0];
+  assert.deepEqual(eg.members.map(m => [m.memberId, m.name, m.active]), [[me.memberId, 'たろう', true]]);
+  assert.equal(eg.events[0].candidates.length, 2);
+  assert.equal(eg.events[0].answers[0].answers, `${ids[0]}:○,${ids[1]}:×`);
+  assert.equal(eg.events[0].answers[0].comment, 'よろしく');
+
+  assert.equal(g.adminSetMove(token, 'moved', {}).error.code, 'INVALID'); // リンクなしでは「引っ越しました」にできない
+  ok(g.adminSetMove(token, 'moved', { [gid]: 'https://new.example/g/abc', other: 'javascript:alert(1)' }));
+  assert.deepEqual(ok(g.openGroup(tk, me.memberId)).move, { mode: 'moved', link: 'https://new.example/g/abc' });
+  assert.match(g.submitAnswers(tk, ev.eventId, me.memberId, {}).error.message, /https:\/\/new\.example\/g\/abc/);
+  assert.equal(g.adminExportForB('bad').error.code, 'AUTH');
+
+  ok(g.adminSetMove(token, ''));
+  ok(g.submitAnswers(tk, ev.eventId, me.memberId, { [ids[0]]: '△' }));
+});

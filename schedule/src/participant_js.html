@@ -54,6 +54,7 @@
     var memberId = known ? lsGet('sch.me.' + known, '') : '';
     call('openGroup', [TOKEN, memberId]).then(function (d) {
       S.group = d.group; S.events = d.events; S.me = d.me;
+      if (d.move) { S.move = d.move; S.view = 'moved'; render(); return; } // B案への引っ越し(11/28)
       var map = lsGet('sch.knownGroupIds', {}); map[TOKEN] = d.group.id; lsSet('sch.knownGroupIds', map);
       rememberGroup();
       if (!S.me) {
@@ -130,6 +131,7 @@
     else if (S.view === 'join') h = viewJoin();
     else if (S.view === 'group') h = viewGroup();
     else if (S.view === 'event') h = viewEvent();
+    else if (S.view === 'moved') h = viewMoved();
     app.innerHTML = h;
   }
 
@@ -143,6 +145,22 @@
   function meBar() {
     return '<div class="mebar"><div class="grow"><b>' + esc(S.me.name) + '</b> さんとして答えています</div>' +
       '<button class="chip" data-act="changeMe">ちがう</button></div>';
+  }
+
+  /** B案への引っ越し中・引っ越したあと(11/28) */
+  function viewMoved() {
+    var m = S.move || {};
+    var h = '<div class="topbar"><span class="grp">' + esc(S.group ? S.group.name : '') + '</span></div>';
+    if (m.mode === 'moving') {
+      h += hero('いま引っ越し中だよ!', 'tsunaboru_normal');
+      return h + '<h1>いま、新しいアプリに引っ越し中です</h1><p class="muted">数分で終わります。少し待ってから、もう一度開いてね。答えは消えません。</p>' +
+        '<button class="btn ghost" data-act="reload">もう一度開く</button>';
+    }
+    h += hero('新しいアプリに引っ越したよ!', 'tsunaboru_excited');
+    h += '<h1>新しいアプリに引っ越しました</h1><p class="muted">これまでの答えは、そのまま引き継いでいます。下のボタンから開いてね(最初に1回だけ、自分の名前を選び直してね)。</p>';
+    if (m.link) h += '<a class="btn" href="' + esc(m.link) + '" target="_top">新しいアプリを開く</a>';
+    else h += '<p class="muted">新しいリンクは、幹事からLINEで届きます。</p>';
+    return h;
   }
 
   function viewError() {

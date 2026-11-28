@@ -20,7 +20,8 @@ function openGroup(token, memberId) {
       // memberCount:名前を選ぶ画面で「前にこのグループに入ったことがある」を、名前の一覧を待たずにすぐ出すため
       group: { id: g.id, name: g.name, kind: g.kind, mascot: g.mascot, memberCount: members.filter(function (m) { return m.active; }).length },
       me: me ? { memberId: me.memberId, name: me.name } : null,
-      events: events
+      events: events,
+      move: moveInfo_(g) // B案への引っ越し(11/28)。null か { mode: 'moving' | 'moved', link }
     };
   });
 }
@@ -84,6 +85,7 @@ function listMembers(token) {
 function joinGroup(token, input) {
   return api_(function () {
     var g = groupByToken_(token);
+    requireNotMoved_(g);
     var inp = input || {};
     var name = normalizeName(inp.name);
     if (!name || nameLength(name) > NAME_MAX) throw appError_('INVALID', '名前は1〜' + NAME_MAX + '文字で入れてください');
@@ -182,6 +184,7 @@ function eventView_(g, ev, memberId, fresh) {
 function submitAnswers(token, eventId, memberId, answers, comment) {
   return api_(function () {
     var g = groupByToken_(token);
+    requireNotMoved_(g);
     return withLock_(function () {
       var ev = eventById_(g, eventId, true);
       if (ev.status === EV_POLL && isClosed(ev, todayYmd_())) throw appError_('CLOSED', '締め切りを過ぎたので変えられません');
@@ -218,6 +221,7 @@ function saveAnswers_(g, ev, memberId, answers, comment) {
 function submitAttendance(token, eventId, memberId, input) {
   return api_(function () {
     var g = groupByToken_(token);
+    requireNotMoved_(g);
     var inp = input || {};
     if (['行く', '行かない', '途中から'].indexOf(inp.status) < 0) throw appError_('INVALID', '行く・行かない・途中から のどれかを選んでください');
     return withLock_(function () {

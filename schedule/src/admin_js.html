@@ -92,10 +92,34 @@
     return st === '日程調整中' ? '<span class="badge poll">日程調整中</span>' : st === '時間調整中' ? '<span class="badge poll">時間調整中</span>' : st === '出欠確認中' ? '<span class="badge rsvp">出欠確認中</span>' : '<span class="badge">終了</span>';
   }
 
+  // B案への引っ越し(11/28)。グループの一覧のいちばん下に出す
+  function movePart() {
+    var m = S.move;
+    var h = '<div class="card" style="margin-top:24px"><div class="row"><b class="grow">新しいアプリ(B案)への引っ越し</b>' +
+      (m ? '' : '<button class="btn ghost sm" data-act="moveOpen">開く</button>') + '</div>';
+    if (!m) return h + '</div>';
+    var label = m.mode === 'moving' ? '引っ越し中(答えを止めています)' : m.mode === 'moved' ? '引っ越しました(新しいリンクを出しています)' : 'ふつう(引っ越し前)';
+    h += '<div class="sub" style="margin:6px 0">いま:<b>' + label + '</b></div>';
+    h += '<div class="sub">1. 「引っ越し中にする」→ 2. 「書き出す」→ パソコンで B に入れる → 3. 新しいリンクを貼って「引っ越しました」</div>';
+    h += '<div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">' +
+      '<button class="btn ghost sm" data-act="moveSet" data-v="moving">1. 引っ越し中にする</button>' +
+      '<button class="btn ghost sm" data-act="moveExport">2. 書き出す</button>' +
+      '<button class="btn ghost sm" data-act="moveSet" data-v="">ふつうに戻す</button></div>';
+    if (S.moveExport) {
+      h += '<div class="sub" style="margin-top:8px">ファイルが保存されないときは、下の中身を全部コピーして、メモ帳で <b>a-export.json</b> という名前で保存してください</div>' +
+        '<textarea class="remind" readonly style="min-height:80px">' + esc(S.moveExport) + '</textarea>' +
+        '<button class="btn ghost sm" data-act="moveCopy">中身を全部コピー</button>';
+    }
+    h += '<div class="field" style="margin-top:10px"><label class="sub">3. 新しいリンク(パソコンで B に入れたときに出る links の中身をそのまま貼る)</label>' +
+      '<textarea class="remind" data-in="moveLinks" style="min-height:60px" placeholder=\'{"G001":"https://…/g/…"}\'>' + esc(S.moveLinks || '') + '</textarea></div>' +
+      '<button class="btn sm" data-act="moveDone">3. 「引っ越しました」にする</button>';
+    return h + '</div>';
+  }
+
   function viewHome() {
     var h = '<div class="top"><div class="grow"><h1>日程調整 運営</h1><div class="sub">グループとイベントの一覧</div></div>' +
       '<button class="btn ghost" data-act="newOnce">1回きりのイベントを作る</button><button class="btn" data-act="newGroup">グループを作る</button></div>';
-    if (!S.groups.length) return h + '<div class="card">まだグループがありません。「グループを作る」から始めましょう。</div>';
+    if (!S.groups.length) return h + '<div class="card">まだグループがありません。「グループを作る」から始めましょう。</div>' + movePart();
     h += '<div class="grid">';
     S.groups.forEach(function (g) {
       var live = g.events.filter(function (e) { return !e.archived; });
@@ -109,7 +133,7 @@
       });
       h += '</div>';
     });
-    return h + '</div>';
+    return h + '</div>' + movePart();
   }
 
   function viewNewGroup() {
@@ -379,6 +403,34 @@
       }).withFailureHandler(function () { S.busy = false; S.err = '通信できませんでした'; render(); }).adminLogin(S.pw || '');
     },
     home: function () { loadHome(); },
+    moveOpen: function () { call('adminGetMove').then(function (d) { S.move = d; render(); }).catch(fail); },
+    moveSet: function (el) {
+      var v = el.getAttribute('data-v');
+      var msg = v === 'moving' ? '引っ越し中にしますか?参加者は答えを送れなくなります(「少し待ってね」と出ます)' : 'ふつうに戻しますか?参加者はまたこのアプリで答えられるようになります';
+      if (!window.confirm(msg)) return;
+      call('adminSetMove', [v, {}]).then(function (d) { S.move = d; toast(v === 'moving' ? '引っ越し中にしました' : 'ふつうに戻しました'); render(); }).catch(fail);
+    },
+    moveExport: function () {
+      if (S.move && S.move.mode !== 'moving' && !window.confirm('まだ「引っ越し中」になっていません。このまま書き出すと、このあと答えた人の分は移りません。書き出しますか?')) return;
+      toast('書き出しています…');
+      call('adminExportForB').then(function (d) {
+        S.moveExport = JSON.stringify(d);
+        try {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([S.moveExport], { type: 'application/json' }));
+          a.download = 'a-export.json'; document.body.appendChild(a); a.click(); a.remove();
+        } catch (e) { /* 保存できない場合は下の中身をコピーしてもらう */ }
+        var n = d.groups.reduce(function (s, g) { return s + g.members.length; }, 0);
+        toast('書き出しました(グループ ' + d.groups.length + '・メンバー ' + n + '人)'); render();
+      }).catch(fail);
+    },
+    moveCopy: function () { copy(S.moveExport || ''); },
+    moveDone: function () {
+      var links;
+      try { links = JSON.parse(S.moveLinks || ''); } catch (e) { toast('貼った中身の形が正しくありません'); return; }
+      if (!window.confirm('「引っ越しました」にしますか?参加者には新しいリンクが出て、このアプリでは答えられなくなります')) return;
+      call('adminSetMove', ['moved', links]).then(function (d) { S.move = d; toast('「引っ越しました」にしました'); render(); }).catch(fail);
+    },
     newGroup: function () { S.form = newForm(); S.err = ''; S.view = 'newGroup'; render(); },
     newOnce: function () { S.form = newForm({ once: true, mascot: false }); S.err = ''; S.view = 'newEvent'; render(); },
     setKind: function (el) { S.form.kind = el.getAttribute('data-v'); render(); },
@@ -566,6 +618,7 @@
     }
   };
   var INPUTS = {
+    moveLinks: function (v) { S.moveLinks = v; },
     pw: function (v) { S.pw = v; },
     remind: function (v) { S.remind = v; },
     groupName: function (v) { S.groupName = v; },
