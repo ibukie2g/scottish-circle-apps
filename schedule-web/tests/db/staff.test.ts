@@ -158,3 +158,25 @@ test('場所のリンクと、名前つきのほかのリンク(最大5つ)が�
   const six = JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ label: 'L' + i, url: 'https://e.com/' + i })));
   await fails(db.as(owner, `update public.events set links = $2::jsonb where id = $1`, [ev, six]));
 });
+
+test('いつ答えたか・変更の記録:本人/運営を分ける。出欠の変更も残る。運営以外は見られない', async () => {
+  // beforeEach で p1(青木)・p2(石井)が答えている
+  let r = await db.rpc(owner, 'staff_event_results', [ev]);
+  expect(r.members[0].answered_at).toBeTruthy();
+  expect(r.members[2].answered_at).toBeNull(); // 答えていない人
+  expect(r.members[0].imported).toBe(false);
+  // 運営が代わりに入れる
+  await db.as(owner, `insert into public.answers (group_id, event_id, member_id, candidate_id, mark) values ($1,$2,$3,$4,'t')`, [g.id, ev, m3, d1]);
+  await db.rpc(owner, 'staff_decide', [ev, d1]); // 出欠の仮入れ(○→行く)も記録される
+  await db.rpc(p1, 'submit_attendance', [g.token, ev, 'no']);
+  const log = await db.rpc(owner, 'staff_change_log', [ev]);
+  expect(log[0]).toMatchObject({ kind: 'attendance', member: '青木', old: 'go', new: 'no', by: 'self' });
+  const proxy = log.find((x: any) => x.kind === 'answer' && x.member === '上田');
+  expect(proxy).toMatchObject({ by: 'staff', new: 't', date: '2026-12-19' });
+  expect(log.filter((x: any) => x.kind === 'answer' && x.member === '青木').length).toBe(2);
+  r = await db.rpc(owner, 'staff_event_results', [ev]);
+  expect(r.members[0].responded_at).toBeTruthy();
+  expect(await fails(db.rpc(p1, 'staff_change_log', [ev]))).toMatch(/FORBIDDEN/);
+  expect(await fails(db.rpc(otherOrg, 'staff_change_log', [ev]))).toMatch(/FORBIDDEN/);
+  expect(await db.as(p1, `select * from public.attendance_log`)).toEqual([]);
+});

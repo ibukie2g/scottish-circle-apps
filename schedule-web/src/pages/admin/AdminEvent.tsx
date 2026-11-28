@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { currentStage, filterMembers, formatDateJa, stageCandidates, summarize, unanswered } from '../../core/schedule';
 import type { AttendanceStatus, Mark, Member, Visibility } from '../../core/types';
-import { admin, copyText, nowLabel, participantLink, toStatusInput, type EventStyle, type StaffResults } from '../../lib/admin';
+import { admin, copyText, fmtAt, nowLabel, participantLink, toStatusInput, type ChangeLogEntry, type EventStyle, type StaffResults } from '../../lib/admin';
 import { eventStatusLines } from '../../core/status';
 import { Confirm, Loading, navigate, toast } from '../../ui';
 import { StatusBadge } from './AdminGroups';
@@ -163,7 +163,8 @@ export function AdminEvent({ id }: { id: string }) {
       {r.members.filter((m) => shown.has(m.id)).map((m) => (
         <div key={m.id} className="card" style={{ padding: '8px 12px' }}>
           <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
-            <b className="grow">{m.name}{m.arrive_at && m.attendance === 'partial' && <span className="muted"> ({m.arrive_at}〜)</span>}</b>
+            <b className="grow">{m.name}{m.arrive_at && m.attendance === 'partial' && <span className="muted"> ({m.arrive_at}〜)</span>}
+              {m.responded_at && <span className="muted" style={{ fontSize: 11, fontWeight: 400 }}> ・ {fmtAt(m.responded_at)}</span>}</b>
             <select value={m.attendance ?? ''} onChange={(e) => run(() => admin.saveResponse(r, m.id, { attendance: (e.target.value || null) as AttendanceStatus | null }), '変えました')}>
               <option value="">まだ</option>{ATT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
@@ -222,6 +223,9 @@ export function AdminEvent({ id }: { id: string }) {
         </>
       )}
 
+      <AnsweredTimes r={r} shown={shown} />
+      <ChangeLog eventId={ev.id} />
+
       {calc.dateSum && (ev.status !== 'poll') && (
         <details><summary>日程調整のときの結果</summary>{resultCards(calc.dateSum, false, null)}</details>
       )}
@@ -250,6 +254,63 @@ export function AdminEvent({ id }: { id: string }) {
           onNo={() => setConfirm(null)} />
       )}
     </>
+  );
+}
+
+/** メンバーごとの「最後に答えた日時」(11/29 伊吹) */
+function AnsweredTimes({ r, shown }: { r: StaffResults; shown: Set<string> }) {
+  const list = r.members.filter((m) => shown.has(m.id));
+  const at = (m: StaffResults['members'][number]) => m.answered_at ?? '';
+  const sorted = list.slice().sort((a, b) => at(b).localeCompare(at(a)));
+  const answered = list.filter((m) => m.answered_at || m.imported || Object.keys(m.answers).length).length;
+  return (
+    <details>
+      <summary>いつ答えたか({answered}/{list.length}人)</summary>
+      <div className="card" style={{ fontSize: 13 }}>
+        {sorted.map((m) => (
+          <div key={m.id} className="row" style={{ padding: '2px 0' }}>
+            <span className="grow">{m.name}</span>
+            <span className="muted">
+              {m.answered_at ? fmtAt(m.answered_at) : m.imported ? '前のアプリで回答' : Object.keys(m.answers).length ? '' : 'まだ'}
+              {m.responded_at && ` ・ 出欠 ${fmtAt(m.responded_at)}`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+const ATT_LABEL: Record<string, string> = { go: '行く', partial: '途中から', no: '行かない' };
+const MARK_LABEL: Record<string, string> = { o: '○', t: '△', x: '×' };
+
+/** 変更の記録(新しい順)。開いたときに読み込む(11/29 伊吹) */
+function ChangeLog({ eventId }: { eventId: string }) {
+  const [log, setLog] = useState<ChangeLogEntry[] | null>(null);
+  const [err, setErr] = useState('');
+  const load = () => { setErr(''); admin.changeLog(eventId).then(setLog).catch((e) => setErr(e.message)); };
+  const who = (x: ChangeLogEntry) => (x.by === 'staff' ? `運営${x.by_name ? '(' + x.by_name + ')' : ''}が入力` : x.by === 'import' ? '引っ越し' : '本人');
+  return (
+    <details onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !log) load(); }}>
+      <summary>変更の記録(だれが・いつ・何を)</summary>
+      <div className="card" style={{ fontSize: 13 }}>
+        {err && <div className="err">{err}</div>}
+        {!log ? <span className="muted">読み込み中…</span> : !log.length ? <span className="muted">まだ記録はありません(前のアプリでの答えは記録がありません)</span> : (
+          <>
+            {log.map((x, i) => (
+              <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid var(--line)' }}>
+                <span className="muted">{fmtAt(x.at)}</span> <b>{x.member ?? '(削除した人)'}</b>{' '}
+                {x.kind === 'answer'
+                  ? <>{x.stage === 'time' ? `${x.time}〜` : formatDateJa(x.date ?? '')} {x.old ? MARK_LABEL[x.old] : '—'}→{x.new ? MARK_LABEL[x.new] : '消した'}</>
+                  : <>出欠 {x.old ? ATT_LABEL[x.old] : '—'}→{x.new ? ATT_LABEL[x.new] : 'まだ'}</>}
+                <span className="muted" style={{ fontSize: 11 }}> ({who(x)})</span>
+              </div>
+            ))}
+            <button className="link" onClick={load}>最新にする</button>
+          </>
+        )}
+      </div>
+    </details>
   );
 }
 

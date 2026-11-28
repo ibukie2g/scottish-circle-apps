@@ -31,8 +31,19 @@ export interface StaffResults {
     id: string; name: string; kana: string | null; grade: string | null; gender: string | null;
     answers: Record<string, Mark>; comment: string; attendance: AttendanceStatus | null; arrive_at: string;
     att_comment: string; course_id: string | null; paid: boolean;
+    answered_at: string | null; imported: boolean; responded_at: string | null;
   }[];
 }
+
+/** 変更の記録の1行(staff_change_log) */
+export interface ChangeLogEntry {
+  at: string; kind: 'answer' | 'attendance'; member: string | null;
+  date?: string; time?: string; stage?: Stage; old: string | null; new: string | null;
+  by: 'self' | 'staff' | 'import'; by_name: string | null;
+}
+
+/** 日時を「11/29 14:03」に */
+export const fmtAt = (at: string | null) => (at ? new Date(at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 
 /** エラーを日本語に(表の制約・トリガーのメッセージから) */
 export function adminError(e: { message?: string } | null | undefined): Error {
@@ -77,6 +88,7 @@ export const admin = {
     q<StaffResults>(supabase.rpc('staff_decide', { p_event: eventId, p_candidate: candidateId, p_times: times })),
   decideTime: (eventId: string, candidateId: string) =>
     q<StaffResults>(supabase.rpc('staff_decide_time', { p_event: eventId, p_candidate: candidateId })),
+  changeLog: (eventId: string) => q<ChangeLogEntry[]>(supabase.rpc('staff_change_log', { p_event: eventId, p_limit: 300 })),
   undecide: (eventId: string) => q<StaffResults>(supabase.rpc('staff_undecide', { p_event: eventId })),
 
   createEvent: async (ev: {
