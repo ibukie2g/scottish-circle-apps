@@ -52,10 +52,11 @@ export interface EventView {
   event: {
     id: string; name: string; description: string; place: string; cost: string; url: string;
     status: EventStatus; visibility: Visibility; deadline: string | null; stage: 'date' | 'time';
-    closed: boolean; decided: { date: string; time: string } | null;
+    closed: boolean; decided: { date: string; time: string } | null; notice?: string;
   };
+  courses?: { id: string; name: string; price: number }[];
   candidates: { id: string; date: string; time: string; memo: string }[];
-  mine: { answers: Record<string, Mark>; comment: string; attendance: AttendanceStatus | null; arrive_at: string; att_comment: string } | null;
+  mine: { answers: Record<string, Mark>; comment: string; attendance: AttendanceStatus | null; arrive_at: string; att_comment: string; course_id?: string | null } | null;
   results: StageResults | null;
   date_stage: StageResults | null;
   attendance: { go: number; partial: number; no: number; names: { go: string[]; partial: string[]; no: string[] } | null } | null;
@@ -80,8 +81,10 @@ export const api = {
   getEvent: (token: string, eventId: string) => rpc<EventView>('get_event', { p_token: token, p_event: eventId }),
   submitAnswers: (token: string, eventId: string, answers: Record<string, Mark | ''>, comment: string | null) =>
     rpc<EventView>('submit_answers', { p_token: token, p_event: eventId, p_answers: answers, p_comment: comment }),
-  submitAttendance: (token: string, eventId: string, status: AttendanceStatus, arriveAt: string, comment: string) =>
-    rpc<EventView>('submit_attendance', { p_token: token, p_event: eventId, p_status: status, p_arrive_at: arriveAt, p_comment: comment }),
+  submitAttendance: (token: string, eventId: string, status: AttendanceStatus, arriveAt: string, comment: string, course: string | null) =>
+    rpc<EventView>('submit_attendance', { p_token: token, p_event: eventId, p_status: status, p_arrive_at: arriveAt, p_comment: comment, p_course: course }),
+  chooseCourse: (token: string, eventId: string, course: string | null) =>
+    rpc<EventView>('choose_course', { p_token: token, p_event: eventId, p_course: course }),
   myEvents: () => rpc<OtherGroup[]>('my_events'),
 };
 

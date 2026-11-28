@@ -1,5 +1,5 @@
 // イベントのページ:○△×をつける/出欠を答える/みんなの回答を見る
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { calendarData, formatDateJa, rankResults } from '../core/schedule';
 import type { AttendanceStatus, Mark } from '../core/types';
 import { api, isTodo, type EventView, type StageResults } from '../lib/api';
@@ -18,12 +18,15 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
   const [comment, setComment] = useState('');
   const [att, setAtt] = useState<{ status: AttendanceStatus | null; arriveAt: string; comment: string }>({ status: null, arriveAt: '', comment: '' });
   const [sending, setSending] = useState(false);
+  const [course, setCourse] = useState<string | null>(null);
+  const [thanks, setThanks] = useState(false);
 
   const apply = useCallback((v: EventView) => {
     setD(v);
     setDraft({ ...(v.mine?.answers ?? {}) });
     setComment(v.mine?.comment ?? '');
     setAtt({ status: v.mine?.attendance ?? null, arriveAt: v.mine?.arrive_at ?? '', comment: v.mine?.att_comment ?? '' });
+    setCourse(v.mine?.course_id ?? null);
   }, []);
   const load = useCallback(() => {
     api.getEvent(token, eventId).then(apply).catch((e) => setErr((e as Error).message));
@@ -33,10 +36,10 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
 
   // スマホでアプリを切りかえて戻ってきたら、最新にする(送っている途中は除く)
   useEffect(() => {
-    const on = () => { if (document.visibilityState === 'visible' && me && !sending) load(); };
+    const on = () => { if (document.visibilityState === 'visible' && me && !sending && !thanks) load(); };
     document.addEventListener('visibilitychange', on);
     return () => document.removeEventListener('visibilitychange', on);
-  }, [me, sending, load]);
+  }, [me, sending, thanks, load]);
 
   if (gErr || err) return <ErrorView message={gErr || err} />;
   if (!gv) return <Loading />;
@@ -68,7 +71,8 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
     setSending(true);
     try {
       apply(await fn());
-      toast('送ったよ!');
+      setThanks(true); // 送ったら「ありがとう」の画面へ(11/28 伊吹)
+      window.scrollTo(0, 0);
     } catch (e) {
       toast((e as Error).message);
     } finally {
@@ -80,6 +84,17 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
   if (ev.deadline && ev.status === 'poll') meta.push(`締め切り ${formatDateJa(ev.deadline)}`);
   if (d.results && (ev.status === 'poll' || isTime)) meta.push(`回答 ${d.results.answered_count}人`);
   const otherTodo = others.reduce((n, x) => n + x.events.filter(isTodo).length, 0);
+  const courses = d.courses ?? [];
+
+  if (thanks) {
+    return (
+      <>
+        {top}
+        <ThanksView d={d} showMascot={g.mascot} courses={courses} otherTodo={otherTodo}
+          onEdit={() => setThanks(false)} onGroup={() => navigate(groupPath(token))} multi={multi} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -88,6 +103,7 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
       <h1>{ev.name}</h1>
       {meta.length > 0 && <div className="meta">{meta.join(' ・ ')}</div>}
       <DetailBox ev={ev} />
+      {ev.notice && ev.status !== 'poll' && <div className="note" style={{ whiteSpace: 'pre-wrap', color: 'var(--ink)' }}>📣 {ev.notice}</div>}
       {isTime && ev.decided && (
         <div className="decided">
           <div className="muted">決まった日</div>
@@ -97,10 +113,15 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
       )}
       {ev.status === 'rsvp' || (ev.status === 'done' && ev.decided) ? (
         <RsvpPart d={d} me={gv.me.name} att={att} setAtt={setAtt} sending={sending}
-          onSend={() => send(() => api.submitAttendance(token, eventId, att.status!, att.arriveAt, att.comment))} />
+          coursePicker={courses.length > 0 && att.status && att.status !== 'no' ? <CoursePicker courses={courses} value={course} onChange={setCourse} /> : null}
+          onSend={() => send(() => api.submitAttendance(token, eventId, att.status!, att.arriveAt, att.comment, att.status === 'no' ? null : course))} />
       ) : (
         <PollPart d={d} me={gv.me.name} draft={draft} setDraft={setDraft} comment={comment} setComment={setComment} sending={sending}
-          onSend={() => send(() => api.submitAnswers(token, eventId, draft, comment))} />
+          coursePicker={isTime && courses.length > 0 ? <CoursePicker courses={courses} value={course} onChange={setCourse} /> : null}
+          onSend={() => send(async () => {
+            const v = await api.submitAnswers(token, eventId, draft, comment);
+            return isTime && courses.length && course !== (v.mine?.course_id ?? null) ? api.chooseCourse(token, eventId, course) : v;
+          })} />
       )}
       <ResultsPart d={d} />
       {otherTodo > 0 && (
@@ -128,7 +149,7 @@ function DetailBox({ ev }: { ev: EventView['event'] }) {
 function PollPart(p: {
   d: EventView; me: string; draft: Record<string, Mark | ''>;
   setDraft: (f: (prev: Record<string, Mark | ''>) => Record<string, Mark | ''>) => void;
-  comment: string; setComment: (v: string) => void; sending: boolean; onSend: () => void;
+  comment: string; setComment: (v: string) => void; sending: boolean; onSend: () => void; coursePicker: ReactNode;
 }) {
   const { d, draft } = p;
   const isTime = d.event.status === 'time';
@@ -167,6 +188,7 @@ function PollPart(p: {
             <label>ひとこと(なくてもOK)</label>
             <input maxLength={100} value={p.comment} placeholder="例)22日は少し遅れるかも" onChange={(e) => p.setComment(e.target.value)} />
           </div>
+          {p.coursePicker}
           <div className="sendas"><b>{p.me}</b> さんとして送ります</div>
           <button className="btn" disabled={p.sending || !filled} onClick={p.onSend}>
             {p.sending ? '送っています…' : Object.keys(d.mine?.answers ?? {}).length ? '答えを直して送る' : '送る'}
@@ -181,24 +203,19 @@ function PollPart(p: {
 }
 
 function RsvpPart(p: {
-  d: EventView; me: string; sending: boolean; onSend: () => void;
+  d: EventView; me: string; sending: boolean; onSend: () => void; coursePicker: ReactNode;
   att: { status: AttendanceStatus | null; arriveAt: string; comment: string };
   setAtt: (v: { status: AttendanceStatus | null; arriveAt: string; comment: string }) => void;
 }) {
   const ev = p.d.event;
   const dec = ev.decided!;
-  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, url: location.href });
+  const going = p.d.mine?.attendance === 'go' || p.d.mine?.attendance === 'partial';
   return (
     <>
       <div className="decided">
         <div className="muted">決まった日</div>
         <div className="big">{formatDateJa(dec.date)}{dec.time && ` ${dec.time}〜`}</div>
-        {cal && ev.status === 'rsvp' && (
-          <div className="cal">
-            <a className="btn ghost small" href={cal.googleUrl} target="_blank" rel="noopener noreferrer">Googleカレンダーに追加</a>
-            <a className="btn ghost small" href={'data:text/calendar;charset=utf-8,' + encodeURIComponent(cal.ics)} download="event.ics">iPhoneのカレンダーに追加</a>
-          </div>
-        )}
+        {going && ev.status === 'rsvp' && <CalendarButtons ev={ev} />}
       </div>
       {ev.status === 'done' ? (
         <div className="note">このイベントは終わりました。</div>
@@ -213,6 +230,7 @@ function RsvpPart(p: {
           {p.att.status === 'partial' && (
             <div className="field"><label>何時ごろ来られる?</label><input type="time" value={p.att.arriveAt} onChange={(e) => p.setAtt({ ...p.att, arriveAt: e.target.value })} /></div>
           )}
+          {p.coursePicker}
           <div className="field"><label>ひとこと(なくてもOK)</label><input maxLength={100} value={p.att.comment} onChange={(e) => p.setAtt({ ...p.att, comment: e.target.value })} /></div>
           <div className="sendas"><b>{p.me}</b> さんとして送ります</div>
           <button className="btn" disabled={p.sending || !p.att.status} onClick={p.onSend}>{p.sending ? '送っています…' : '送る'}</button>
@@ -275,5 +293,82 @@ function Names({ list }: { list: [string, Mark, string[]][] }) {
         <div key={cls}><span className={'lab ' + cls}>{lab}</span>{names.join('・')}</div>
       ))}
     </div>
+  );
+}
+
+/** コースを選ぶ(飲み放題/ソフトドリンクなど)。時間を聞いているときと、出欠のときに出す */
+function CoursePicker({ courses, value, onChange }: { courses: { id: string; name: string; price: number }[]; value: string | null; onChange: (v: string | null) => void }) {
+  return (
+    <>
+      <div className="section">コース</div>
+      <div className="rsvp" style={{ gridTemplateColumns: `repeat(${Math.min(courses.length, 3)}, 1fr)` }}>
+        {courses.map((c) => (
+          <button key={c.id} className={'go' + (value === c.id ? ' on' : '')} onClick={() => onChange(value === c.id ? null : c.id)}>
+            {c.name}{c.price > 0 && <><br /><small style={{ fontWeight: 400 }}>{c.price.toLocaleString('ja-JP')}円</small></>}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** カレンダーに追加。iPhone は本物のファイル(/api/ics)を開くと「カレンダーに追加」が出る */
+function CalendarButtons({ ev }: { ev: EventView['event'] }) {
+  const dec = ev.decided!;
+  const link = location.origin + location.pathname;
+  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, url: link });
+  if (!cal) return null;
+  const ics = '/api/ics?' + new URLSearchParams({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, url: link }).toString();
+  return (
+    <div className="cal">
+      <a className="btn ghost small" href={cal.googleUrl} target="_blank" rel="noopener noreferrer">Googleカレンダーに追加</a>
+      <a className="btn ghost small" href={ics}>iPhoneのカレンダーに追加</a>
+    </div>
+  );
+}
+
+/** 送ったあとの画面(11/28 伊吹:送ったら「ありがとう、閉じていいよ」に移る) */
+function ThanksView({ d, showMascot, courses, otherTodo, onEdit, onGroup, multi }: {
+  d: EventView; showMascot: boolean; courses: { id: string; name: string; price: number }[]; otherTodo: number;
+  onEdit: () => void; onGroup: () => void; multi: boolean;
+}) {
+  const ev = d.event, mine = d.mine;
+  const isRsvp = ev.status === 'rsvp';
+  const going = mine?.attendance === 'go' || mine?.attendance === 'partial';
+  const course = courses.find((c) => c.id === mine?.course_id);
+  const label: Record<Mark, string> = { o: '○', t: '△', x: '×' };
+  return (
+    <>
+      <Hero show={showMascot} msg="答えてくれてありがとう!" face="joy" />
+      <h1>送りました!</h1>
+      <p className="muted">このページは閉じて大丈夫だよ。答えを変えたくなったら、同じリンクからいつでも直せます。</p>
+      <div className="card">
+        <b>{ev.name}</b>
+        {isRsvp ? (
+          <div style={{ marginTop: 6 }}>
+            {ev.decided && <div>{formatDateJa(ev.decided.date)}{ev.decided.time && ` ${ev.decided.time}〜`}</div>}
+            <div>出欠:<b>{mine?.attendance === 'go' ? '行く' : mine?.attendance === 'partial' ? `途中から${mine.arrive_at ? `(${mine.arrive_at}〜)` : ''}` : '行かない'}</b></div>
+            {course && <div>コース:<b>{course.name}</b>{course.price > 0 && `(${course.price.toLocaleString('ja-JP')}円)`}</div>}
+          </div>
+        ) : (
+          <div className="names" style={{ marginTop: 6, fontSize: 14 }}>
+            {d.candidates.filter((c) => mine?.answers[c.id]).map((c) => (
+              <div key={c.id}><span className={'lab ' + mine!.answers[c.id]}>{label[mine!.answers[c.id]!]}</span>
+                {ev.status === 'time' ? `${c.time}〜` : formatDateJa(c.date)}</div>
+            ))}
+            {course && <div>コース:<b>{course.name}</b></div>}
+          </div>
+        )}
+      </div>
+      {isRsvp && going && ev.decided && (
+        <>
+          <div className="section">カレンダーに入れておく?</div>
+          <CalendarButtons ev={ev} />
+        </>
+      )}
+      <button className="btn ghost" onClick={onEdit}>答えを直す・みんなの回答を見る</button>
+      {otherTodo > 0 && <button className="btn" onClick={onGroup}>ほかにも、まだ答えていないのが{otherTodo}こあるよ</button>}
+      {multi && otherTodo === 0 && <div className="foot"><button className="link" onClick={onGroup}>イベントの一覧へ</button></div>}
+    </>
   );
 }

@@ -5,9 +5,17 @@ import { isTodo, type EventSummary } from './lib/api';
 
 // ---------- 画面の移動(/g/:token と /g/:token/e/:eventId) ----------
 
-export type Route = { page: 'home' } | { page: 'group'; token: string } | { page: 'event'; token: string; eventId: string };
+export type AdminView = { view: 'home' } | { view: 'group'; id: string } | { view: 'event'; id: string } | { view: 'new'; groupId: string };
+export type Route = { page: 'home' } | { page: 'admin'; sub: AdminView } | { page: 'group'; token: string } | { page: 'event'; token: string; eventId: string };
 
+const UUID = '[0-9a-f-]{36}';
 export function parseRoute(path: string): Route {
+  if (/^\/admin\/?$/.test(path)) return { page: 'admin', sub: { view: 'home' } };
+  const a = new RegExp(`^/admin/(g|e|new)/(${UUID})/?$`).exec(path);
+  if (a) {
+    const id = a[2]!;
+    return { page: 'admin', sub: a[1] === 'g' ? { view: 'group', id } : a[1] === 'e' ? { view: 'event', id } : { view: 'new', groupId: id } };
+  }
   const m = /^\/g\/([A-Za-z0-9_-]{20,})(?:\/e\/([0-9a-f-]{36}))?\/?$/.exec(path);
   if (!m) return { page: 'home' };
   return m[2] ? { page: 'event', token: m[1]!, eventId: m[2] } : { page: 'group', token: m[1]! };

@@ -47,6 +47,11 @@ export function OthersPart({ title, others }: { title: string; others: OtherGrou
 export function GroupPage({ token }: { token: string }) {
   const { view, error, reload, changing, setChanging } = useGroup(token);
   const others = useOthers(token);
+  // 1回きりのグループは、リンクを開くとそのイベントが直接開く(A案と同じ)
+  const onlyEvent = view?.me && !changing && view.group.kind === 'once' && view.events.length === 1 ? view.events[0]!.id : null;
+  useEffect(() => {
+    if (onlyEvent) { history.replaceState(null, '', eventPath(token, onlyEvent)); window.dispatchEvent(new PopStateEvent('popstate')); }
+  }, [onlyEvent, token]);
   if (error) return <ErrorView message={error} />;
   if (!view) return <Loading />;
   if (!view.me || changing) return <PickName token={token} view={view} onDone={reload} />;
