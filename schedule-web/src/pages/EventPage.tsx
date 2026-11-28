@@ -112,7 +112,7 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
         </div>
       )}
       {ev.status === 'rsvp' || (ev.status === 'done' && ev.decided) ? (
-        <RsvpPart d={d} me={gv.me.name} att={att} setAtt={setAtt} sending={sending}
+        <RsvpPart d={d} me={gv.me.name} att={att} setAtt={setAtt} sending={sending} courses={courses}
           coursePicker={courses.length > 0 && att.status && att.status !== 'no' ? <CoursePicker courses={courses} value={course} onChange={setCourse} /> : null}
           onSend={() => send(() => api.submitAttendance(token, eventId, att.status!, att.arriveAt, att.comment, att.status === 'no' ? null : course))} />
       ) : (
@@ -212,12 +212,22 @@ function PollPart(p: {
 
 function RsvpPart(p: {
   d: EventView; me: string; sending: boolean; onSend: () => void; coursePicker: ReactNode;
+  courses: { id: string; name: string; price: number }[];
   att: { status: AttendanceStatus | null; arriveAt: string; comment: string };
   setAtt: (v: { status: AttendanceStatus | null; arriveAt: string; comment: string }) => void;
 }) {
   const ev = p.d.event;
   const dec = ev.decided!;
-  const going = p.d.mine?.attendance === 'go' || p.d.mine?.attendance === 'partial';
+  const mine = p.d.mine;
+  const going = mine?.attendance === 'go' || mine?.attendance === 'partial';
+  const course = p.courses.find((c) => c.id === mine?.course_id);
+  // もう出欠が入っている人には「こう登録されています」だけ見せ、変えたい人だけフォームを開く(11/28 伊吹)
+  // コースを選ぶ飲み会で、行くのにコースがまだの人はフォームを出す
+  const needsCourse = going && p.courses.length > 0 && !course;
+  const [editing, setEditing] = useState(false);
+  const showForm = editing || !mine?.attendance || needsCourse;
+  const statusLabel = mine?.attendance === 'go' ? '行く'
+    : mine?.attendance === 'partial' ? `途中から${mine.arrive_at ? `(${mine.arrive_at}〜)` : ''}` : '行かない';
   return (
     <>
       <div className="decided">
@@ -227,8 +237,17 @@ function RsvpPart(p: {
       </div>
       {ev.status === 'done' ? (
         <div className="note">このイベントは終わりました。</div>
+      ) : !showForm ? (
+        <div className="card">
+          <div className="muted">いまの登録</div>
+          <div style={{ fontSize: 18, fontWeight: 700, margin: '2px 0' }}>{statusLabel}{course && ` ・ ${course.name}`}</div>
+          {mine?.att_comment && <div className="muted">ひとこと:{mine.att_comment}</div>}
+          <button className="btn ghost" onClick={() => setEditing(true)}>変える</button>
+        </div>
       ) : (
         <>
+          {mine?.attendance && !needsCourse && <div className="muted" style={{ marginTop: 12 }}>いまの登録:{statusLabel}{course && ` ・ ${course.name}`}</div>}
+          {needsCourse && <div className="note">コースを選んでね</div>}
           <div className="section">行ける?</div>
           <div className="rsvp">
             {([['go', '行く'], ['partial', '途中から'], ['no', '行かない']] as const).map(([s, label]) => (
