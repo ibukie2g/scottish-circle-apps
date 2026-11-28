@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { currentStage, filterMembers, formatDateJa, stageCandidates, summarize, unanswered } from '../../core/schedule';
 import type { AttendanceStatus, Mark, Member, Visibility } from '../../core/types';
-import { admin, copyText, participantLink, type EventStyle, type StaffResults } from '../../lib/admin';
+import { admin, copyText, nowLabel, participantLink, toStatusInput, type EventStyle, type StaffResults } from '../../lib/admin';
+import { eventStatusLines } from '../../core/status';
 import { Confirm, Loading, navigate, toast } from '../../ui';
 import { StatusBadge } from './AdminGroups';
 import { CandidatePicker, StylePicker, VisibilityPicker } from './EventForm';
@@ -87,6 +88,10 @@ export function AdminEvent({ id }: { id: string }) {
       <div className="quick" style={{ flexWrap: 'wrap' }}>
         <button className="chip" onClick={async () => toast((await copyText(link)) ? 'リンクをコピーしました' : 'コピーできませんでした')}>リンクをコピー</button>
         <button className="chip" onClick={() => run(load, '最新にしました')}>最新にする</button>
+        <button className="chip" onClick={async () => {
+          const text = [`${nowLabel()} 時点の状況(名前なし)`, '', ...eventStatusLines(toStatusInput(r, g.name))].join('\n');
+          toast((await copyText(text)) ? '状況をコピーしました(名前なし)' : 'コピーできませんでした');
+        }}>状況をコピー(名前なし)</button>
         <button className="chip" onClick={() => setModal({ kind: 'edit' })}>変える</button>
         {(grades.length > 1 || genders.length > 1) && (
           <>

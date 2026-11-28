@@ -2,6 +2,7 @@
 import type { AttendanceStatus, EventStatus, Mark, Stage, Visibility } from '../core/types';
 import type { Kind } from './api';
 import { supabase } from './supabase';
+import { statusText, type StatusEventInput } from '../core/status';
 
 /** 飲み会(コース・会費・割り勘を使う)/イベント(遊び・運動会など) */
 export type EventStyle = 'event' | 'party';
@@ -122,6 +123,23 @@ export const admin = {
     if (ids.length) await q(supabase.from('wanted').insert(ids.map((member_id) => ({ group_id: r.group.id, event_id: r.event.id, member_id }))));
   },
 };
+
+/** 運営の結果 → 「状況をコピー(名前なし)」の入力(名前・ひとことは渡さない) */
+export function toStatusInput(r: StaffResults, groupName: string): StatusEventInput {
+  return {
+    groupName, name: r.event.name, status: r.event.status, style: r.event.style, deadline: r.event.deadline,
+    decided: r.event.decided, candidates: r.candidates, courses: r.courses,
+    members: r.members.map((m) => ({ id: m.id, answers: m.answers, attendance: m.attendance, course_id: m.course_id, paid: m.paid })),
+  };
+}
+
+export const nowLabel = () => new Date().toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** いくつかのイベントの状況をまとめて作る */
+export async function buildStatus(targets: { groupName: string; eventId: string }[]): Promise<string> {
+  const results = await Promise.all(targets.map((t) => admin.results(t.eventId)));
+  return statusText(results.map((r, i) => toStatusInput(r, targets[i]!.groupName)), nowLabel());
+}
 
 export const participantLink = (token: string, eventId?: string) =>
   location.origin + '/g/' + token + (eventId ? '/e/' + eventId : '');

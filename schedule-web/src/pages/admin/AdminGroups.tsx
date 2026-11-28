@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react';
 import { formatDateJa } from '../../core/schedule';
 import type { EventStatus } from '../../core/types';
 import type { Kind } from '../../lib/api';
-import { admin, copyText, participantLink, type AdminGroup, type AdminMember } from '../../lib/admin';
+import { admin, buildStatus, copyText, participantLink, type AdminGroup, type AdminMember } from '../../lib/admin';
 import { Confirm, Loading, navigate, toast } from '../../ui';
+
 
 export const KIND_LABEL: Record<Kind, string> = { circle: 'サークル', group: 'グループ', once: '1回きり' };
 export const STATUS_LABEL: Record<EventStatus, string> = { poll: '日程調整中', time: '時間調整中', rsvp: '出欠確認中', done: '終了' };
@@ -25,6 +26,24 @@ export function AdminHome() {
   const [name, setName] = useState('');
   const [kind, setKind] = useState<Kind>('group');
   const [showArchived, setShowArchived] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [making, setMaking] = useState(false);
+
+  /** 進行中のイベントの状況を、名前なしの文にしてコピーする(AI に状況を伝える用。11/28) */
+  async function copyStatus() {
+    if (!groups) return;
+    setMaking(true);
+    try {
+      const text = await buildStatus(groups.filter((g) => !g.archived)
+        .flatMap((g) => g.events.filter((e) => e.status !== 'done').map((e) => ({ groupName: g.name, eventId: e.id }))));
+      setStatus(text);
+      toast((await copyText(text)) ? '状況をコピーしました(名前なし)' : '下の文を長押ししてコピーしてください');
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setMaking(false);
+    }
+  }
 
   useEffect(() => { admin.groups().then(setGroups).catch((e) => setErr(e.message)); }, []);
 
@@ -74,6 +93,11 @@ export function AdminHome() {
       )}
       {!creating && err && <div className="err">{err}</div>}
       {!live.length && <p className="muted">まだグループがありません。「＋ 作る」から作ってください。</p>}
+      <div className="row" style={{ margin: '4px 0 10px', gap: 8 }}>
+        <button className="chip" disabled={making} onClick={copyStatus}>{making ? '作っています…' : '全部の状況をコピー(名前なし)'}</button>
+        <span className="muted" style={{ fontSize: 12 }}>AIに相談するときに貼る用。人数と日付だけ</span>
+      </div>
+      {status && <textarea readOnly value={status} style={{ width: '100%', minHeight: 160, fontSize: 12, padding: 8, border: '1.5px solid var(--line)', borderRadius: 10 }} />}
       {live.map(row)}
       {old.length > 0 && (
         <details open={showArchived} onToggle={(e) => setShowArchived((e.target as HTMLDetailsElement).open)}>
@@ -93,6 +117,16 @@ export function AdminGroupView({ id }: { id: string }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: '', kind: 'group' as Kind, mascot: true });
   const [removeFor, setRemoveFor] = useState<AdminMember | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  async function copyGroupStatus() {
+    if (!g) return;
+    try {
+      const text = await buildStatus(g.events.filter((e) => e.status !== 'done').map((e) => ({ groupName: g.name, eventId: e.id })));
+      setStatus(text);
+      toast((await copyText(text)) ? 'このグループの状況をコピーしました(名前なし)' : '下の文を長押ししてコピーしてください');
+    } catch (e) { toast((e as Error).message); }
+  }
 
   async function load() {
     try {
@@ -135,8 +169,10 @@ export function AdminGroupView({ id }: { id: string }) {
       </div>
 
       <div className="row section"><span className="grow">イベント</span>
+        <button className="chip" onClick={copyGroupStatus}>状況をコピー(名前なし)</button>
         <button className="btn small" onClick={() => navigate(`/admin/new/${g.id}`)}>＋ イベントを作る</button>
       </div>
+      {status && <textarea readOnly value={status} style={{ width: '100%', minHeight: 120, fontSize: 12, padding: 8, border: '1.5px solid var(--line)', borderRadius: 10 }} />}
       {!events.length && <p className="muted">まだイベントがありません。</p>}
       {events.map((e) => (
         <a key={e.id} className="card ev" style={{ display: 'block' }} href={`/admin/e/${e.id}`} onClick={go(`/admin/e/${e.id}`)}>
