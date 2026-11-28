@@ -255,6 +255,25 @@ export function calendarDetails(p: {
   return parts.join('\n\n').slice(0, 900);
 }
 
+/**
+ * Googleカレンダー用のメモ(HTML)。Googleは長いURLを途中で区切ってリンクにしてしまうので、
+ * 「名前を押すと開くリンク」の形にする(11/28 伊吹のiPhoneで確認)。iPhoneのカレンダーは calendarDetails(文字だけ)
+ */
+export function calendarDetailsHtml(p: {
+  notice?: string; description?: string; place?: string; placeUrl?: string; links?: { label: string; url: string }[]; page?: string;
+}): string {
+  const h = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const a = (url: string, label: string) => (/^https?:\/\//.test(url) ? `<a href="${h(url)}">${h(label)}</a>` : '');
+  const parts = [
+    p.notice?.trim() ? h(p.notice.trim()).replace(/\n/g, '<br>') : '',
+    p.description?.trim() ? h(p.description.trim()).replace(/\n/g, '<br>') : '',
+    p.placeUrl ? `📍 ${a(p.placeUrl, (p.place || '場所') + 'の地図')}` : '',
+    ...(p.links ?? []).filter((l) => l.url).map((l) => `🔗 ${a(l.url, l.label || 'リンク')}`),
+    p.page ? `出欠の確認・変更:${a(p.page, 'このイベントを開く')}` : '',
+  ].filter(Boolean);
+  return parts.join('<br><br>');
+}
+
 /** 長さ(分)を「2時間」「1時間30分」に */
 export function durationLabel(min: number): string {
   const h = Math.floor(min / 60), m = min % 60;
@@ -268,7 +287,7 @@ export function durationLabel(min: number): string {
  */
 export function calendarData(opts: {
   title?: string; date: string; time?: string; place?: string; url?: string; hours?: number;
-  minutes?: number; details?: string;
+  minutes?: number; details?: string; googleDetails?: string;
 }): { googleUrl: string; ics: string } | null {
   const d = parseYmd(opts.date);
   if (!d) return null;
@@ -294,7 +313,7 @@ export function calendarData(opts: {
     'https://calendar.google.com/calendar/render?action=TEMPLATE' +
     `&text=${encodeURIComponent(title)}&dates=${startStr}/${endStr}` +
     (opts.place ? `&location=${encodeURIComponent(opts.place)}` : '') +
-    (details ? `&details=${encodeURIComponent(details)}` : '');
+    ((opts.googleDetails ?? details) ? `&details=${encodeURIComponent(opts.googleDetails ?? details)}` : '');
   const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/[,;]/g, '\\$&').replace(/\n/g, '\\n');
   const ics = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//scottish-circle//schedule//JA', 'BEGIN:VEVENT',

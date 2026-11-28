@@ -182,6 +182,13 @@ test('カレンダー:長さ(分)と、案内・説明・リンクの入った�
   const c = C.calendarData({ title: '忘年会', date: '2026-12-19', time: '19:00', minutes: 180, details })!;
   expect(c.googleUrl).toMatch(/dates=20261219T100000Z\/20261219T130000Z/);
   expect(c.ics).toMatch(/DESCRIPTION:現地集合\\n\\n📍 地図:https:\/\/maps.example\/x/);
+  // Googleカレンダー用:URL は出さず、名前を押すと開くリンクにする(文字は HTML のエスケープ)
+  const html = C.calendarDetailsHtml({ notice: '集合<駅>\n持ち物なし', place: '上酒林', placeUrl: 'https://maps.example/x',
+    links: [{ label: 'メニュー', url: 'https://e.com/m' }], page: 'https://app/g/t/e/27e08dc6-59c7-46d1-82fc-43e5223c7a98' });
+  expect(html).toBe('集合&lt;駅&gt;<br>持ち物なし<br><br>📍 <a href="https://maps.example/x">上酒林の地図</a><br><br>🔗 <a href="https://e.com/m">メニュー</a>'
+    + '<br><br>出欠の確認・変更:<a href="https://app/g/t/e/27e08dc6-59c7-46d1-82fc-43e5223c7a98">このイベントを開く</a>');
+  const g2 = C.calendarData({ title: 'x', date: '2026-12-19', details: 'text', googleDetails: html })!;
+  expect(decodeURIComponent(g2.googleUrl)).toContain('<a href="https://e.com/m">メニュー</a>');
   expect(C.durationLabel(90)).toBe('1時間30分');
   expect(C.durationLabel(120)).toBe('2時間');
 });

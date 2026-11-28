@@ -1,6 +1,6 @@
 // イベントのページ:○△×をつける/出欠を答える/みんなの回答を見る
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { calendarData, calendarDetails, formatDateJa, rankResults } from '../core/schedule';
+import { calendarData, calendarDetails, calendarDetailsHtml, formatDateJa, rankResults } from '../core/schedule';
 import type { AttendanceStatus, Mark } from '../core/types';
 import { api, isTodo, type EventView, type StageResults } from '../lib/api';
 import { ErrorView, groupPath, Hero, Loading, MeBar, navigate, toast, type Face } from '../ui';
@@ -330,7 +330,11 @@ function CalendarButtons({ ev }: { ev: EventView['event'] }) {
     links: (ev.links ?? []).filter((l) => safeUrl(l.url)), url: safeUrl(ev.url), page: link,
   });
   const minutes = ev.duration_min || 120;
-  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, minutes, details });
+  const googleDetails = calendarDetailsHtml({
+    notice: ev.notice, description: ev.description, place: ev.place, placeUrl: safeUrl(ev.place_url),
+    links: (ev.links ?? []).filter((l) => safeUrl(l.url)), page: link,
+  });
+  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, minutes, details, googleDetails });
   if (!cal) return null;
   const ics = '/api/ics?' + new URLSearchParams({
     title: ev.name, date: dec.date, time: dec.time, min: String(minutes), place: ev.place, desc: details, url: /^https:/.test(ev.place_url ?? '') ? ev.place_url! : link,
