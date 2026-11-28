@@ -1,8 +1,9 @@
 // 運営:イベントを作る(候補日を1つずつ/「火曜と金曜を4週分」のようにまとめて足す・コース)
 import { useEffect, useState } from 'react';
-import { expandDates, formatDateJa, sortCandidates, todayJst } from '../../core/schedule';
+import { durationLabel, expandDates, formatDateJa, sortCandidates, todayJst } from '../../core/schedule';
 import type { Visibility } from '../../core/types';
 import { admin, type AdminGroup, type EventStyle } from '../../lib/admin';
+import { checkEventFields, cleanEventFields, emptyEvent, EventFields, type Course, type EventFieldsValue } from './EventFields';
 import { Loading, navigate, toast } from '../../ui';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
@@ -71,6 +72,19 @@ export function CourseEditor({ list, setList }: { list: { id?: string; name: str
   );
 }
 
+const DURATIONS = [60, 90, 120, 150, 180, 240, 300, 360, 480];
+
+/** カレンダーに入れる長さ(時刻が決まっているとき) */
+export function DurationPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <div className="field"><label>長さ(カレンダーに入れるとき)</label>
+      <select value={value} onChange={(e) => onChange(+e.target.value)}>
+        {(DURATIONS.includes(value) ? DURATIONS : [...DURATIONS, value].sort((a, b) => a - b)).map((m) => <option key={m} value={m}>{durationLabel(m)}</option>)}
+      </select>
+    </div>
+  );
+}
+
 /** 飲み会かイベントか(11/28 伊吹:お金まわりの画面は飲み会のときだけ) */
 export function StylePicker({ value, onChange }: { value: EventStyle; onChange: (v: EventStyle) => void }) {
   return (
@@ -86,55 +100,54 @@ export function StylePicker({ value, onChange }: { value: EventStyle; onChange: 
 
 export function EventForm({ groupId }: { groupId: string }) {
   const [g, setG] = useState<AdminGroup | null>(null);
-  const [f, setF] = useState({ name: '', description: '', place: '', cost: '', url: '', deadline: '', visibility: 'names' as Visibility, style: 'event' as EventStyle, notice: '' });
+  const [f, setF] = useState<EventFieldsValue>(emptyEvent);
   const [cands, setCands] = useState<Cand[]>([]);
-  const [courses, setCourses] = useState<{ name: string; price: number }[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [err, setErr] = useState('');
   const [sending, setSending] = useState(false);
   useEffect(() => { admin.group(groupId).then((x) => { setG(x); if (x.kind === 'once' && !x.events.length) setF((p) => ({ ...p, name: x.name })); }).catch((e) => setErr(e.message)); }, [groupId]);
 
   async function create() {
-    if (!f.name.trim()) { setErr('イベントの名前を入れてください'); return; }
-    if (!cands.length) { setErr('候補日を1つ以上足してください'); return; }
-    if (f.url && !/^https?:\/\//.test(f.url)) { setErr('リンクは http から始まるものにしてください'); return; }
+    const problem = checkEventFields(f) || (!cands.length ? '候補日を1つ以上足してください' : '');
+    if (problem) { setErr(problem); return; }
     const cs = f.style === 'party' ? courses.filter((c) => c.name.trim()) : [];
     setSending(true); setErr('');
     try {
-      const id = await admin.createEvent({ group_id: groupId, ...f, name: f.name.trim(), deadline: f.deadline || null }, cands, cs);
+      const id = await admin.createEvent({ group_id: groupId, ...cleanEventFields(f) }, cands, cs);
       toast('作りました');
       navigate(`/admin/e/${id}`);
     } catch (e) { setErr((e as Error).message); setSending(false); }
   }
 
   if (!g) return err ? <div className="err">{err}</div> : <Loading />;
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
     <>
       <div className="topbar"><button className="back" onClick={() => navigate(`/admin/g/${g.id}`)}>← {g.name}</button></div>
       <h1>イベントを作る</h1>
-      <div className="field"><label>名前</label><input maxLength={60} value={f.name} placeholder="例)忘年会" onChange={set('name')} /></div>
+      <div className="field"><label>名前</label><input maxLength={60} value={f.name} placeholder="例)忘年会" onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       <StylePicker value={f.style} onChange={(style) => setF({ ...f, style })} />
       <div className="section">候補日</div>
       <CandidatePicker list={cands} setList={setCands} />
-      <div className="field"><label>締め切り(なくてもOK。その日の23:59まで)</label><input type="date" value={f.deadline} onChange={set('deadline')} /></div>
-      <div className="field"><label>結果の見せ方</label>
-        <select value={f.visibility} onChange={set('visibility')}>
-          <option value="names">名前も見せる</option>
-          <option value="counts">人数だけ見せる</option>
-          <option value="hidden">見せない(運営だけ)</option>
-        </select>
-      </div>
+      <div className="field"><label>締め切り(なくてもOK。その日の23:59まで)</label><input type="date" value={f.deadline} onChange={(e) => setF({ ...f, deadline: e.target.value })} /></div>
+      <VisibilityPicker value={f.visibility} onChange={(visibility) => setF({ ...f, visibility })} />
       <details>
-        <summary>くわしく(説明・場所・お金・リンク・コース)</summary>
-        <div className="field"><label>説明</label><textarea maxLength={1000} value={f.description} onChange={set('description')} /></div>
-        <div className="field"><label>場所</label><input maxLength={100} value={f.place} onChange={set('place')} /></div>
-        <div className="field"><label>お金の目安</label><input maxLength={100} value={f.cost} placeholder="例)3000円くらい" onChange={set('cost')} /></div>
-        <div className="field"><label>リンク(お店など)</label><input maxLength={500} value={f.url} placeholder="https://" onChange={set('url')} /></div>
-        <div className="field"><label>日にちが決まったあとの案内(参加者の画面に出す。値段・集合場所・持ち物など)</label><textarea maxLength={500} value={f.notice} onChange={set('notice')} /></div>
-        {f.style === 'party' && <div className="field"><label>コース(時間や出欠を聞くときに選んでもらう。なくてOK)</label><CourseEditor list={courses} setList={setCourses} /></div>}
+        <summary>くわしく(説明・場所・リンク・決まったあとの案内・カレンダー{f.style === 'party' ? '・コース' : ''})</summary>
+        <EventFields f={f} setF={setF} courses={courses} setCourses={setCourses} />
       </details>
       {err && <div className="err">{err}</div>}
       <button className="btn" disabled={sending} onClick={create}>{sending ? '作っています…' : '作る'}</button>
     </>
+  );
+}
+
+export function VisibilityPicker({ value, onChange }: { value: Visibility; onChange: (v: Visibility) => void }) {
+  return (
+    <div className="field"><label>結果の見せ方</label>
+      <select value={value} onChange={(e) => onChange(e.target.value as Visibility)}>
+        <option value="names">名前も見せる</option>
+        <option value="counts">人数だけ見せる</option>
+        <option value="hidden">見せない(運営だけ)</option>
+      </select>
+    </div>
   );
 }

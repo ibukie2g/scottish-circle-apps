@@ -5,7 +5,8 @@ import type { AttendanceStatus, Mark, Member, Visibility } from '../../core/type
 import { admin, copyText, participantLink, type EventStyle, type StaffResults } from '../../lib/admin';
 import { Confirm, Loading, navigate, toast } from '../../ui';
 import { StatusBadge } from './AdminGroups';
-import { CandidatePicker, CourseEditor, StylePicker } from './EventForm';
+import { CandidatePicker, StylePicker, VisibilityPicker } from './EventForm';
+import { checkEventFields, cleanEventFields, EventFields, type Course, type EventFieldsValue } from './EventFields';
 
 const ATT: [AttendanceStatus, string][] = [['go', '行く'], ['partial', '途中から'], ['no', '行かない']];
 const MARKS: [Mark, string][] = [['o', '○'], ['t', '△'], ['x', '×']];
@@ -360,31 +361,33 @@ function EventModal({ r, modal, setModal, busy, run }: {
 
 function EditEvent({ r, busy, run }: { r: StaffResults; busy: boolean; run: (fn: () => Promise<unknown>, msg: string) => Promise<void> }) {
   const ev = r.event;
-  const [f, setF] = useState({ name: ev.name, description: ev.description, place: ev.place, cost: ev.cost, url: ev.url, deadline: ev.deadline ?? '', visibility: ev.visibility as Visibility, style: ev.style as EventStyle, notice: ev.notice });
-  const [courses, setCourses] = useState<{ id?: string; name: string; price: number }[]>(r.courses);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const [f, setF] = useState<EventFieldsValue>({
+    name: ev.name, description: ev.description, place: ev.place, place_url: ev.place_url ?? '', cost: ev.cost,
+    links: ev.links ?? [], deadline: ev.deadline ?? '', visibility: ev.visibility as Visibility, style: ev.style as EventStyle,
+    notice: ev.notice, duration_min: ev.duration_min ?? 120,
+  });
+  const [courses, setCourses] = useState<Course[]>(r.courses);
+  const [err, setErr] = useState('');
   async function save() {
-    if (f.url && !/^https?:\/\//.test(f.url)) throw new Error('リンクは http から始まるものにしてください');
-    await admin.updateEvent(ev.id, { ...f, deadline: f.deadline || null });
+    await admin.updateEvent(ev.id, cleanEventFields(f));
     const keep = f.style === 'party' ? courses.filter((c) => c.name.trim()) : r.courses;
     await admin.setCourses(ev.id, keep, r.courses.filter((c) => !keep.some((k) => k.id === c.id)).map((c) => c.id));
   }
   return (
     <>
       <h2 style={{ marginTop: 0 }}>イベントを変える</h2>
-      <div className="field"><label>名前</label><input maxLength={60} value={f.name} onChange={set('name')} /></div>
+      <div className="field"><label>名前</label><input maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       <StylePicker value={f.style} onChange={(style) => setF({ ...f, style })} />
-      <div className="field"><label>日にちが決まったあとの案内(参加者の画面に出す。値段・集合場所・持ち物など)</label><textarea maxLength={500} value={f.notice} onChange={set('notice')} /></div>
-      <div className="field"><label>締め切り</label><input type="date" value={f.deadline} onChange={set('deadline')} /></div>
-      <div className="field"><label>結果の見せ方</label>
-        <select value={f.visibility} onChange={set('visibility')}><option value="names">名前も見せる</option><option value="counts">人数だけ見せる</option><option value="hidden">見せない(運営だけ)</option></select>
-      </div>
-      <div className="field"><label>説明</label><textarea maxLength={1000} value={f.description} onChange={set('description')} /></div>
-      <div className="field"><label>場所</label><input maxLength={100} value={f.place} onChange={set('place')} /></div>
-      <div className="field"><label>お金の目安</label><input maxLength={100} value={f.cost} onChange={set('cost')} /></div>
-      <div className="field"><label>リンク</label><input maxLength={500} value={f.url} onChange={set('url')} /></div>
-      {f.style === 'party' && <div className="field"><label>コース(時間や出欠を聞くときに選んでもらう)</label><CourseEditor list={courses} setList={setCourses} /></div>}
-      <button className="btn" disabled={busy} onClick={() => run(save, '保存しました')}>保存</button>
+      <div className="field"><label>締め切り</label><input type="date" value={f.deadline} onChange={(e) => setF({ ...f, deadline: e.target.value })} /></div>
+      <VisibilityPicker value={f.visibility} onChange={(visibility) => setF({ ...f, visibility })} />
+      <EventFields f={f} setF={setF} courses={courses} setCourses={setCourses} />
+      {err && <div className="err">{err}</div>}
+      <button className="btn" disabled={busy} onClick={() => {
+        const problem = checkEventFields(f);
+        if (problem) { setErr(problem); return; }
+        setErr('');
+        run(save, '保存しました');
+      }}>保存</button>
     </>
   );
 }

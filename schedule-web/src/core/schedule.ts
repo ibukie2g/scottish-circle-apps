@@ -238,20 +238,48 @@ function utcStamp(d: Date): string {
 }
 
 /**
+ * カレンダーの予定のメモ(11/28 伊吹):案内・説明・リンク(地図など)・このイベントのページ
+ * 空のものは入れない。長すぎないように 900 字まで
+ */
+export function calendarDetails(p: {
+  notice?: string; description?: string; placeUrl?: string; links?: { label: string; url: string }[]; url?: string; page?: string;
+}): string {
+  const parts = [
+    p.notice?.trim(),
+    p.description?.trim(),
+    p.placeUrl ? `📍 地図:${p.placeUrl}` : '',
+    ...(p.links ?? []).filter((l) => l.url).map((l) => `🔗 ${l.label || 'リンク'}:${l.url}`),
+    p.url ? `🔗 ${p.url}` : '',
+    p.page ? `出欠の確認・変更:${p.page}` : '',
+  ].filter(Boolean);
+  return parts.join('\n\n').slice(0, 900);
+}
+
+/** 長さ(分)を「2時間」「1時間30分」に */
+export function durationLabel(min: number): string {
+  const h = Math.floor(min / 60), m = min % 60;
+  return (h ? `${h}時間` : '') + (m ? `${m}分` : '');
+}
+
+/**
  * カレンダーに追加するためのデータ
  * - googleUrl:Googleカレンダーの予定作成画面
  * - ics:iPhone などのカレンダー用ファイルの中身(日本時間。時刻がなければ終日)
  */
-export function calendarData(opts: { title?: string; date: string; time?: string; place?: string; url?: string; hours?: number }): { googleUrl: string; ics: string } | null {
+export function calendarData(opts: {
+  title?: string; date: string; time?: string; place?: string; url?: string; hours?: number;
+  minutes?: number; details?: string;
+}): { googleUrl: string; ics: string } | null {
   const d = parseYmd(opts.date);
   if (!d) return null;
   const title = opts.title || '予定';
-  const details = opts.url || '';
+  const details = opts.details ?? opts.url ?? '';
+  const minutes = opts.minutes || (opts.hours || 2) * 60;
   let startStr: string, endStr: string, icsStart: string, icsEnd: string;
   const m = /^(\d{1,2}):(\d{2})$/.exec(opts.time || '');
   if (m) {
     const start = new Date(d.getTime() + (+m[1]! * 60 + +m[2]! - 9 * 60) * 60000); // 日本時間 → UTC
-    const end = new Date(start.getTime() + (opts.hours || 2) * 3600000);
+    const end = new Date(start.getTime() + minutes * 60000);
     startStr = utcStamp(start);
     endStr = utcStamp(end);
     icsStart = `DTSTART:${startStr}`;

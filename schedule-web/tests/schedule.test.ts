@@ -172,3 +172,16 @@ test('カレンダー:時刻あり(日本時間→UTC)と終日', () => {
   expect(b.ics).toMatch(/DTSTART;VALUE=DATE:20261231\r\nDTEND;VALUE=DATE:20270101/);
   expect(C.calendarData({ title: 'x', date: 'bad' })).toBeNull();
 });
+
+test('カレンダー:長さ(分)と、案内・説明・リンクの入ったメモ', () => {
+  const details = C.calendarDetails({
+    notice: '現地集合', description: '', placeUrl: 'https://maps.example/x',
+    links: [{ label: 'メニュー', url: 'https://e.com/m' }], page: 'https://app/g/t/e/1',
+  });
+  expect(details).toBe('現地集合\n\n📍 地図:https://maps.example/x\n\n🔗 メニュー:https://e.com/m\n\n出欠の確認・変更:https://app/g/t/e/1');
+  const c = C.calendarData({ title: '忘年会', date: '2026-12-19', time: '19:00', minutes: 180, details })!;
+  expect(c.googleUrl).toMatch(/dates=20261219T100000Z\/20261219T130000Z/);
+  expect(c.ics).toMatch(/DESCRIPTION:現地集合\\n\\n📍 地図:https:\/\/maps.example\/x/);
+  expect(C.durationLabel(90)).toBe('1時間30分');
+  expect(C.durationLabel(120)).toBe('2時間');
+});

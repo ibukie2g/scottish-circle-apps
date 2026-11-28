@@ -52,7 +52,8 @@ export interface EventView {
   event: {
     id: string; name: string; description: string; place: string; cost: string; url: string;
     status: EventStatus; visibility: Visibility; deadline: string | null; stage: 'date' | 'time';
-    closed: boolean; decided: { date: string; time: string } | null; notice?: string;
+    closed: boolean; decided: { date: string; time: string } | null; notice?: string; duration_min?: number;
+    place_url?: string; links?: { label: string; url: string }[];
   };
   courses?: { id: string; name: string; price: number }[];
   candidates: { id: string; date: string; time: string; memo: string }[];

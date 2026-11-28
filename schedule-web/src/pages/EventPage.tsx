@@ -1,6 +1,6 @@
 // イベントのページ:○△×をつける/出欠を答える/みんなの回答を見る
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { calendarData, formatDateJa, rankResults } from '../core/schedule';
+import { calendarData, calendarDetails, formatDateJa, rankResults } from '../core/schedule';
 import type { AttendanceStatus, Mark } from '../core/types';
 import { api, isTodo, type EventView, type StageResults } from '../lib/api';
 import { ErrorView, groupPath, Hero, Loading, MeBar, navigate, toast, type Face } from '../ui';
@@ -134,14 +134,22 @@ export function EventPage({ token, eventId }: { token: string; eventId: string }
   );
 }
 
+const safeUrl = (u?: string) => (u && /^https?:\/\//.test(u) ? u : '');
+
 function DetailBox({ ev }: { ev: EventView['event'] }) {
-  if (!ev.description && !ev.place && !ev.cost && !ev.url) return null;
+  const placeUrl = safeUrl(ev.place_url);
+  const links = (ev.links ?? []).filter((l) => safeUrl(l.url));
+  if (!ev.description && !ev.place && !placeUrl && !ev.cost && !ev.url && !links.length) return null;
   return (
     <div className="detail">
       {ev.description && <div className="desc">{ev.description}</div>}
-      {ev.place && <div>📍 {ev.place}</div>}
+      {(ev.place || placeUrl) && (
+        <div>📍 {placeUrl ? <a href={placeUrl} target="_blank" rel="noopener noreferrer">{ev.place || '地図を開く'}</a> : ev.place}
+          {placeUrl && ev.place && <span className="muted" style={{ fontSize: 12 }}>(押すと地図)</span>}</div>
+      )}
       {ev.cost && <div>💴 {ev.cost}</div>}
-      {ev.url && /^https?:\/\//.test(ev.url) && <div>🔗 <a href={ev.url} target="_blank" rel="noopener noreferrer">{ev.url}</a></div>}
+      {links.map((l, i) => <div key={i}>🔗 <a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a></div>)}
+      {safeUrl(ev.url) && <div>🔗 <a href={ev.url} target="_blank" rel="noopener noreferrer">{ev.url}</a></div>}
     </div>
   );
 }
@@ -316,9 +324,17 @@ function CoursePicker({ courses, value, onChange }: { courses: { id: string; nam
 function CalendarButtons({ ev }: { ev: EventView['event'] }) {
   const dec = ev.decided!;
   const link = location.origin + location.pathname;
-  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, url: link });
+  // メモには、案内・説明・リンク(地図など)・このページを入れる(11/28 伊吹)
+  const details = calendarDetails({
+    notice: ev.notice, description: ev.description, placeUrl: safeUrl(ev.place_url),
+    links: (ev.links ?? []).filter((l) => safeUrl(l.url)), url: safeUrl(ev.url), page: link,
+  });
+  const minutes = ev.duration_min || 120;
+  const cal = calendarData({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, minutes, details });
   if (!cal) return null;
-  const ics = '/api/ics?' + new URLSearchParams({ title: ev.name, date: dec.date, time: dec.time, place: ev.place, url: link }).toString();
+  const ics = '/api/ics?' + new URLSearchParams({
+    title: ev.name, date: dec.date, time: dec.time, min: String(minutes), place: ev.place, desc: details, url: /^https:/.test(ev.place_url ?? '') ? ev.place_url! : link,
+  }).toString();
   return (
     <div className="cal">
       <a className="btn ghost small" href={cal.googleUrl} target="_blank" rel="noopener noreferrer">Googleカレンダーに追加</a>

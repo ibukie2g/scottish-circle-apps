@@ -148,3 +148,13 @@ test('案内(notice)は参加者に出る。コースは時間調整中・出欠
   await db.as(owner, `update public.events set style = 'event' where id = $1`, [ev]);
   expect(await fails(db.rpc(p1, 'choose_course', [g.token, ev, c1]))).toMatch(/INVALID/);
 });
+
+test('場所のリンクと、名前つきのほかのリンク(最大5つ)が参加者に届く', async () => {
+  await db.as(owner, `update public.events set place = '上酒林', place_url = 'https://maps.app.goo.gl/x',
+    links = '[{"label":"メニュー","url":"https://example.com/menu"}]', duration_min = 180 where id = $1`, [ev]);
+  const v = await db.rpc(p1, 'get_event', [g.token, ev]);
+  expect(v.event).toMatchObject({ place: '上酒林', place_url: 'https://maps.app.goo.gl/x', duration_min: 180,
+    links: [{ label: 'メニュー', url: 'https://example.com/menu' }] });
+  const six = JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ label: 'L' + i, url: 'https://e.com/' + i })));
+  await fails(db.as(owner, `update public.events set links = $2::jsonb where id = $1`, [ev, six]));
+});

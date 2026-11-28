@@ -20,7 +20,7 @@ export interface StaffResults {
     id: string; group_id: string; name: string; description: string; place: string; cost: string; url: string;
     status: EventStatus; visibility: Visibility; deadline: string | null;
     decided_candidate_id: string | null; decided: { date: string; time: string } | null;
-    style: EventStyle; notice: string;
+    style: EventStyle; notice: string; duration_min: number; place_url: string; links: { label: string; url: string }[];
   };
   group: { id: string; name: string; kind: Kind; token: string };
   candidates: { id: string; date: string; time: string; memo: string; stage: Stage }[];
@@ -79,8 +79,9 @@ export const admin = {
   undecide: (eventId: string) => q<StaffResults>(supabase.rpc('staff_undecide', { p_event: eventId })),
 
   createEvent: async (ev: {
-    group_id: string; name: string; description: string; place: string; cost: string; url: string;
-    deadline: string | null; visibility: Visibility; style: EventStyle; notice: string;
+    group_id: string; name: string; description: string; place: string; cost: string; place_url: string;
+    links: { label: string; url: string }[];
+    deadline: string | null; visibility: Visibility; style: EventStyle; notice: string; duration_min: number;
   }, candidates: { date: string; time: string; memo: string }[], courses: { name: string; price: number }[]) => {
     const { id } = await q<{ id: string }>(supabase.from('events').insert(ev).select('id').single());
     if (candidates.length) await q(supabase.from('candidates').insert(candidates.map((c) => ({ ...c, event_id: id }))));
@@ -88,7 +89,8 @@ export const admin = {
     return id;
   },
   updateEvent: (id: string, patch: Partial<{ name: string; description: string; place: string; cost: string; url: string;
-    deadline: string | null; visibility: Visibility; status: EventStatus; style: EventStyle; notice: string }>) => q(supabase.from('events').update(patch).eq('id', id)),
+    place_url: string; links: { label: string; url: string }[];
+    deadline: string | null; visibility: Visibility; status: EventStatus; style: EventStyle; notice: string; duration_min: number }>) => q(supabase.from('events').update(patch).eq('id', id)),
   deleteEvent: (id: string) => q(supabase.from('events').delete().eq('id', id)),
   addCandidates: (eventId: string, list: { date: string; time: string; memo?: string; stage?: Stage }[]) =>
     q(supabase.from('candidates').insert(list.map((c) => ({ memo: '', stage: 'date', ...c, event_id: eventId })))),
